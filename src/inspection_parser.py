@@ -31,6 +31,7 @@ def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
         parsed_sections.extend(_split_sections(text=text, source_file=str(path)))
 
     nodes = _extract_resource_nodes(parsed_sections)
+    db_cluster_data = _extract_database_cluster_data(parsed_sections)
 
     return {
         "report": {
@@ -45,8 +46,10 @@ def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
         "nodes": nodes,
         "cluster": {
             "cluster_status": "未采集",
-            "ha_status": [],
-            "replication_slots": [],
+            "ha_status": db_cluster_data["cluster"]["ha_status"],
+            "ha_summary": db_cluster_data["cluster"]["ha_summary"],
+            "replication_slots": db_cluster_data["cluster"]["replication_slots"],
+            "replication_slot_summary": db_cluster_data["cluster"]["replication_slot_summary"],
             "gs_check_summary": {
                 "ok_count": 0,
                 "ng_count": 0,
@@ -56,9 +59,9 @@ def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
             "resource_summary": _build_resource_summary(nodes),
         },
         "database": {
-            "version": "未采集",
-            "running_status": {},
-            "databases": [],
+            "version": db_cluster_data["database"]["version"],
+            "running_status": db_cluster_data["database"]["running_status"],
+            "databases": db_cluster_data["database"]["databases"],
             "large_tables": [],
             "index_suggestions": [],
             "unused_indexes": [],
@@ -454,3 +457,185 @@ def _build_resource_summary(nodes: list[dict[str, Any]]) -> dict[str, Any]:
         "cluster_min_cpu_idle": min(min_idle_values) if min_idle_values else 0,
         "cluster_max_iowait": max(max_iowait_values) if max_iowait_values else 0,
     }
+
+
+def _extract_database_cluster_data(parsed_sections: list[dict[str, str]]) -> dict[str, Any]:
+    running_records: list[dict[str, Any]] = []
+    replication_slots: list[dict[str, Any]] = []
+    ha_status: list[dict[str, Any]] = []
+    databases: list[dict[str, Any]] = []
+    version = "未采集"
+
+    for section in parsed_sections:
+        name = section["section_name"]
+        content = section["content"]
+        if name == "数据库运行状态检查":
+            running_records.extend(_parse_running_status(content))
+        elif name == "复制槽状态检查":
+            replication_slots.extend(_parse_replication_slots(content))
+        elif name == "集群高可用状态检查":
+            ha_status.extend(_parse_ha_status(content))
+        elif name == "数据库信息检查":
+            databases.extend(_parse_database_info(content))
+
+        if version == "未采集":
+            version = _extract_database_version(content)
+
+    return {
+        "cluster": {
+            "ha_status": ha_status,
+            "ha_summary": _rows_summary("高可用状态", ha_status),
+            "replication_slots": replication_slots,
+            "replication_slot_summary": _rows_summary("复制槽", replication_slots),
+        },
+        "database": {
+            "version": version,
+            "running_status": {
+                "records": running_records,
+                "summary": _rows_summary("数据库运行状态", running_records),
+            },
+            "databases": databases,
+        },
+    }
+
+
+def _parse_running_status(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        is_in_recovery = _value_or_unknown(row.get("is_in_recovery"))
+        records.append(
+            {
+                "checktime": _value_or_unknown(row.get("checktime")),
+                "uptime": _value_or_unknown(row.get("uptime")),
+                "lsn": _value_or_unknown(row.get("lsn")),
+                "insert_lsn": _value_or_unknown(row.get("insert_lsn")),
+                "write_lsn": _value_or_unknown(row.get("write_lsn")),
+                "conf_reload_time": _value_or_unknown(row.get("conf_reload_time")),
+                "is_in_recovery": is_in_recovery,
+                "role_hint": _role_hint(is_in_recovery),
+            }
+        )
+    return records
+
+
+def _parse_replication_slots(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "slot_name": _value_or_unknown(row.get("slot_name")),
+                "slot_type": _value_or_unknown(row.get("slot_type")),
+                "active": _value_or_unknown(row.get("active")),
+                "delay_lsn": _value_or_unknown(row.get("delay_lsn")),
+            }
+        )
+    return records
+
+
+def _parse_ha_status(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "client_addr": _value_or_unknown(row.get("client_addr")),
+                "sync_state": _value_or_unknown(row.get("sync_state")),
+                "pg_xlog_location_diff": _value_or_unknown(row.get("pg_xlog_location_diff")),
+            }
+        )
+    return records
+
+
+def _parse_database_info(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        size_bytes = _to_int(row.get("size_bytes"), default=0)
+        records.append(
+            {
+                "datname": _value_or_unknown(row.get("datname")),
+                "size_bytes": size_bytes,
+                "readable_size": _format_bytes(size_bytes),
+                "age": _value_or_unknown(row.get("age")),
+                "is_template": _value_or_unknown(row.get("is_template")),
+                "allow_conn": _value_or_unknown(row.get("allow_conn")),
+                "conn_limit": _value_or_unknown(row.get("conn_limit")),
+            }
+        )
+    return records
+
+
+def _parse_psql_table(content: str) -> list[dict[str, str]]:
+    lines = [line.rstrip() for line in content.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        if "|" not in line:
+            continue
+        if index + 1 >= len(lines) or not _looks_like_psql_separator(lines[index + 1]):
+            continue
+
+        headers = [item.strip() for item in line.split("|")]
+        rows: list[dict[str, str]] = []
+        for row_line in lines[index + 2 :]:
+            stripped = row_line.strip()
+            if re.match(r"^\(\d+\s+rows?\)$", stripped):
+                break
+            if "|" not in row_line or _looks_like_psql_separator(row_line):
+                continue
+            values = [item.strip() for item in row_line.split("|")]
+            if len(values) != len(headers):
+                continue
+            rows.append(dict(zip(headers, values)))
+        return rows
+    return []
+
+
+def _looks_like_psql_separator(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and set(stripped) <= {"-", "+", " "}
+
+
+def _role_hint(is_in_recovery: str) -> str:
+    normalized = str(is_in_recovery).strip().lower()
+    if normalized in {"f", "false", "0", "no", "n"}:
+        return "主库"
+    if normalized in {"t", "true", "1", "yes", "y"}:
+        return "备库"
+    return "未采集"
+
+
+def _value_or_unknown(value: Any) -> Any:
+    if value is None:
+        return "未采集"
+    stripped = str(value).strip()
+    return stripped if stripped else "未采集"
+
+
+def _rows_summary(label: str, rows: list[dict[str, Any]]) -> str:
+    return f"已解析{len(rows)}条{label}记录" if rows else f"未采集到{label}记录"
+
+
+def _format_bytes(value: Any) -> str:
+    if not isinstance(value, int) or value <= 0:
+        return "未采集"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(value)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.2f} {units[unit_index]}"
+
+
+def _extract_database_version(content: str) -> str:
+    patterns = [
+        r"(?:GaussDB|openGauss|PostgreSQL)[^\r\n]{0,160}",
+        r"(?:数据库版本|版本信息|version)\s*[:：]\s*([^\r\n]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content, flags=re.IGNORECASE)
+        if not match:
+            continue
+        if match.groups():
+            return _value_or_unknown(match.group(1))
+        return _value_or_unknown(match.group(0))
+    return "未采集"
