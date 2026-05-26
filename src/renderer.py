@@ -45,12 +45,19 @@ def _section_body(title: str, data: dict[str, Any], default_body: str) -> str:
     inspection = data.get("inspection", {})
     sections = data.get("sections", {})
     analysis = data.get("analysis", {})
+    report = data.get("report", {})
+    conclusion = data.get("conclusion", {})
 
     if title == "巡检日期":
-        return str(inspection.get("date") or default_body)
+        return str(report.get("inspection_date") or inspection.get("date") or default_body)
     if title == "第一章 总结":
+        summary = conclusion.get("summary") or []
+        if summary:
+            return "\n".join(str(item) for item in summary)
         return str(data.get("summary", {}).get("conclusion") or default_body)
     if title == "第二章 系统概况":
+        if isinstance(sections.get("parsed_sections"), list):
+            return f"已解析巡检章节数量：{len(sections['parsed_sections'])}"
         return str(sections.get("system_overview") or default_body)
     if title == "第三章 总体情况":
         return str(sections.get("overall_status") or default_body)

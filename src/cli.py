@@ -9,7 +9,7 @@ import yaml
 
 from .analyzer import analyze_minimal
 from .archive_extractor import ArchiveExtractionError, extract_package, prepare_workdir
-from .inspection_parser import build_minimal_inspection_data
+from .inspection_parser import parse_inspection_files
 from .renderer import render_docx
 
 
@@ -70,7 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"[GaussDB Report] Generated extraction manifest: {manifest_path}")
 
-    data = build_minimal_inspection_data(input_path=input_path, template_path=template_path)
+    inspection_files = manifest.get("files", {}).get("inspection_rec", [])
+    print(f"[GaussDB Report] Found inspection_rec files: {len(inspection_files)}")
+
+    data = parse_inspection_files(inspection_files)
+    data["report"]["source_package"] = str(input_path)
+    data["report"]["template_file"] = str(template_path)
     data = analyze_minimal(data)
 
     yaml_path = DEFAULT_YAML_OUTPUT
