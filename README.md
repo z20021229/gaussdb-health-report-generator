@@ -44,9 +44,19 @@
 python -m pip install -r requirements.txt
 ```
 
+## 本地解压依赖
+
+`.tar.gz`、`.zip` 等格式优先使用 Python 标准库解压。`.rar` 文件需要本地环境提供兼容的 RAR 解压后端，建议安装以下任意一种工具并加入 `PATH`：
+
+- 7-Zip，提供 `7z`
+- UnRAR，提供 `unrar`
+- bsdtar，提供 `bsdtar`
+
+如果缺少 RAR 解压依赖，程序会给出明确错误提示，不会静默跳过巡检包。
+
 ## 运行命令示例
 
-第一阶段已提供最小可运行命令行流程。该流程会检查输入文件和模板文件是否存在，创建 `output/` 与 `workdir/`，生成最小版结构化 YAML，并输出一个包含基础章节结构的 Word 报告。第一阶段不会解析样例巡检包中的真实客户数据。
+当前流程会检查输入文件和模板文件是否存在，创建 `output/` 与 `workdir/`，将巡检包递归解压到 `workdir/extracted/`，生成解压文件清单、最小版结构化 YAML，并输出一个包含基础章节结构的 Word 报告。当前阶段不会解析样例巡检包中的真实客户数据。
 
 ```powershell
 python -m src.cli `
@@ -58,8 +68,10 @@ python -m src.cli `
 运行后计划生成：
 
 ```text
+output/extracted_manifest.yaml
 output/inspection_data.generated.yaml
 output/收益所有人_GaussDB数据库健康诊断报告.docx
+workdir/extracted/
 ```
 
 ## 测试
@@ -71,8 +83,8 @@ pytest
 ## 后续开发阶段
 
 1. 建立 Python 项目骨架、依赖管理和命令行入口。已完成第一版。
-2. 实现巡检包自动解压，支持 `.rar`、`.tar.gz`、`.zip` 等格式。
-3. 实现文件清单扫描，识别文本、HTML、日志和结构化数据文件。
+2. 实现巡检包自动解压，支持 `.rar`、`.tar.gz`、`.zip` 等格式。已完成第一版。
+3. 实现文件清单扫描，识别文本、HTML、日志和结构化数据文件。已完成第一版。
 4. 定义统一 YAML schema，承载客户、实例、节点、指标、风险和附录路径。
 5. 开发通用解析器，避免依赖单一客户文件名、单一 IP 或单一节点数量。
 6. 实现风险分析规则，将解析结果转换为风险等级、问题说明和整改建议。

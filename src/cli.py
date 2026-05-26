@@ -8,13 +8,14 @@ from pathlib import Path
 import yaml
 
 from .analyzer import analyze_minimal
-from .archive_extractor import prepare_workdir
+from .archive_extractor import ArchiveExtractionError, extract_package, prepare_workdir
 from .inspection_parser import build_minimal_inspection_data
 from .renderer import render_docx
 
 
 DEFAULT_WORKDIR = Path("workdir")
 DEFAULT_YAML_OUTPUT = Path("output") / "inspection_data.generated.yaml"
+DEFAULT_MANIFEST_OUTPUT = Path("output") / "extracted_manifest.yaml"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     output_path = Path(args.output)
     workdir = Path(args.workdir)
 
-    print("[GaussDB Report] Phase 1 skeleton pipeline started.")
+    print("[GaussDB Report] Pipeline started.")
     print(f"[GaussDB Report] Input: {input_path}")
     print(f"[GaussDB Report] Template: {template_path}")
     print(f"[GaussDB Report] Output: {output_path}")
@@ -55,6 +56,19 @@ def main(argv: list[str] | None = None) -> int:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prepare_workdir(workdir)
+
+    try:
+        manifest = extract_package(input_path=str(input_path), workdir=str(workdir))
+    except ArchiveExtractionError as exc:
+        parser.error(str(exc))
+
+    manifest_path = DEFAULT_MANIFEST_OUTPUT
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    print(f"[GaussDB Report] Generated extraction manifest: {manifest_path}")
 
     data = build_minimal_inspection_data(input_path=input_path, template_path=template_path)
     data = analyze_minimal(data)
@@ -69,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
 
     render_docx(data=data, output_path=output_path)
     print(f"[GaussDB Report] Generated DOCX: {output_path}")
-    print("[GaussDB Report] Phase 1 skeleton pipeline completed.")
+    print("[GaussDB Report] Pipeline completed.")
 
     return 0
 
