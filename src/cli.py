@@ -73,7 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     inspection_files = manifest.get("files", {}).get("inspection_rec", [])
     print(f"[GaussDB Report] Found inspection_rec files: {len(inspection_files)}")
 
-    data = parse_inspection_files(inspection_files)
+    data = parse_inspection_files(
+        inspection_files,
+        manifest=manifest,
+        output_dir=output_path.parent,
+    )
     data["report"]["source_package"] = str(input_path)
     data["report"]["template_file"] = str(template_path)
     data = analyze_minimal(data)

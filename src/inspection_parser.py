@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,17 @@ NODE_BLOCK_RE = re.compile(
 )
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 KEY_VALUE_RE = re.compile(r"^\s*(?P<key>[^:]+?)\s*:\s*(?P<value>.*?)\s*$")
+GS_CHECK_RE = re.compile(r"^\s*(?P<name>Check[A-Za-z0-9_]+)\.*\s*(?P<status>OK|NG|NA)\s*$")
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TOP_YAML_LIMIT = 50
+SUMMARY_LIMIT = 600
 
 
-def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
+def parse_inspection_files(
+    inspection_files: list[str],
+    manifest: dict[str, Any] | None = None,
+    output_dir: str | Path = "output",
+) -> dict[str, Any]:
     """Parse all inspection_rec.txt files and preserve their raw sections."""
     source_files = [str(Path(file_path)) for file_path in inspection_files]
     parsed_sections: list[dict[str, str]] = []
@@ -32,6 +41,8 @@ def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
 
     nodes = _extract_resource_nodes(parsed_sections)
     db_cluster_data = _extract_database_cluster_data(parsed_sections)
+    maintenance_data = _extract_maintenance_data(parsed_sections, Path(output_dir))
+    log_data = _extract_log_summaries(manifest or {})
 
     return {
         "report": {
@@ -50,26 +61,27 @@ def parse_inspection_files(inspection_files: list[str]) -> dict[str, Any]:
             "ha_summary": db_cluster_data["cluster"]["ha_summary"],
             "replication_slots": db_cluster_data["cluster"]["replication_slots"],
             "replication_slot_summary": db_cluster_data["cluster"]["replication_slot_summary"],
-            "gs_check_summary": {
-                "ok_count": 0,
-                "ng_count": 0,
-                "na_count": 0,
-                "ng_items": [],
-            },
+            "gs_check_summary": maintenance_data["cluster"]["gs_check_summary"],
             "resource_summary": _build_resource_summary(nodes),
         },
         "database": {
             "version": db_cluster_data["database"]["version"],
             "running_status": db_cluster_data["database"]["running_status"],
             "databases": db_cluster_data["database"]["databases"],
-            "large_tables": [],
-            "index_suggestions": [],
-            "unused_indexes": [],
-            "table_bloat": [],
+            "large_tables": maintenance_data["database"]["large_tables"],
+            "large_tables_summary": maintenance_data["database"]["large_tables_summary"],
+            "index_suggestions": maintenance_data["database"]["index_suggestions"],
+            "index_suggestions_summary": maintenance_data["database"]["index_suggestions_summary"],
+            "unused_indexes": maintenance_data["database"]["unused_indexes"],
+            "unused_indexes_summary": maintenance_data["database"]["unused_indexes_summary"],
+            "table_bloat": maintenance_data["database"]["table_bloat"],
+            "table_bloat_summary": maintenance_data["database"]["table_bloat_summary"],
         },
         "logs": {
-            "fatal_log_summary": "未采集",
-            "panic_log_summary": "未采集",
+            "fatal_log_summary": log_data["fatal_log_summary"],
+            "panic_log_summary": log_data["panic_log_summary"],
+            "fatal_log_files": log_data["fatal_log_files"],
+            "panic_log_files": log_data["panic_log_files"],
         },
         "risks": [],
         "conclusion": {
@@ -637,5 +649,261 @@ def _extract_database_version(content: str) -> str:
             continue
         if match.groups():
             return _value_or_unknown(match.group(1))
-        return _value_or_unknown(match.group(0))
+            return _value_or_unknown(match.group(0))
     return "未采集"
+
+
+def _extract_maintenance_data(parsed_sections: list[dict[str, str]], output_dir: Path) -> dict[str, Any]:
+    large_tables: list[dict[str, Any]] = []
+    index_suggestions: list[dict[str, Any]] = []
+    unused_indexes: list[dict[str, Any]] = []
+    table_bloat: list[dict[str, Any]] = []
+    gs_check_items: list[dict[str, Any]] = []
+
+    for section in parsed_sections:
+        name = section["section_name"]
+        content = section["content"]
+        if name == "大表检查":
+            large_tables.extend(_parse_large_tables(content))
+        elif name == "索引建议":
+            index_suggestions.extend(_parse_index_suggestions(content))
+        elif name == "未使用的索引":
+            unused_indexes.extend(_parse_unused_indexes(content))
+        elif name == "表膨胀检查":
+            table_bloat.extend(_parse_table_bloat(content))
+        elif name == "gs_check巡检信息":
+            gs_check_items.extend(_parse_gs_check(content, output_dir))
+
+    large_tables = sorted(large_tables, key=lambda item: item.get("bytes", 0), reverse=True)[:TOP_YAML_LIMIT]
+    index_suggestions = sorted(
+        index_suggestions,
+        key=lambda item: (_to_int(item.get("seq_scan"), default=0), _size_to_bytes(item.get("table_size"))),
+        reverse=True,
+    )[:TOP_YAML_LIMIT]
+    unused_indexes = sorted(
+        unused_indexes,
+        key=lambda item: _size_to_bytes(item.get("size") or item.get("index_size")),
+        reverse=True,
+    )[:TOP_YAML_LIMIT]
+    table_bloat = sorted(
+        table_bloat,
+        key=lambda item: _to_float(item.get("dead_rate"), default=0),
+        reverse=True,
+    )[:TOP_YAML_LIMIT]
+
+    return {
+        "database": {
+            "large_tables": large_tables,
+            "large_tables_summary": _top_summary("大表", large_tables),
+            "index_suggestions": index_suggestions,
+            "index_suggestions_summary": _top_summary("索引建议", index_suggestions),
+            "unused_indexes": unused_indexes,
+            "unused_indexes_summary": "未发现未使用索引" if not unused_indexes else _top_summary("未使用索引", unused_indexes),
+            "table_bloat": table_bloat,
+            "table_bloat_summary": _top_summary("表膨胀", table_bloat),
+        },
+        "cluster": {
+            "gs_check_summary": _build_gs_check_summary(gs_check_items),
+        },
+    }
+
+
+def _parse_large_tables(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "datname": _value_or_unknown(row.get("datname")),
+                "nspname": _value_or_unknown(row.get("nspname")),
+                "relname": _value_or_unknown(row.get("relname")),
+                "bytes": _to_int(row.get("bytes"), default=0),
+                "relsize": _value_or_unknown(row.get("relsize")),
+                "indexsize": _value_or_unknown(row.get("indexsize")),
+            }
+        )
+    return records
+
+
+def _parse_index_suggestions(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "tablename": _value_or_unknown(row.get("tablename")),
+                "table_size": _value_or_unknown(row.get("table_size")),
+                "seq_scan": _to_int(row.get("seq_scan"), default=0),
+                "idx_scan": _to_int(row.get("idx_scan"), default=0),
+                "rate": _value_or_unknown(row.get("rate")),
+            }
+        )
+    return records
+
+
+def _parse_unused_indexes(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "schemaname": _value_or_unknown(row.get("schemaname")),
+                "relname": _value_or_unknown(row.get("relname")),
+                "indexrelname": _value_or_unknown(row.get("indexrelname")),
+                "idx_scan": _value_or_unknown(row.get("idx_scan")),
+                "size": _value_or_unknown(row.get("index_size") or row.get("size")),
+            }
+        )
+    return records
+
+
+def _parse_table_bloat(content: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in _parse_psql_table(content):
+        records.append(
+            {
+                "schemaname": _value_or_unknown(row.get("schemaname")),
+                "relname": _value_or_unknown(row.get("relname")),
+                "n_live_tup": _to_int(row.get("n_live_tup"), default=0),
+                "n_dead_tup": _to_int(row.get("n_dead_tup"), default=0),
+                "dead_rate": _value_or_unknown(row.get("dead_rate")),
+            }
+        )
+    return records
+
+
+def _parse_gs_check(content: str, output_dir: Path) -> list[dict[str, Any]]:
+    cleaned = _strip_ansi(content)
+    lines = cleaned.splitlines()
+    check_positions: list[tuple[int, re.Match[str]]] = []
+    for index, line in enumerate(lines):
+        match = GS_CHECK_RE.match(line)
+        if match:
+            check_positions.append((index, match))
+
+    items: list[dict[str, Any]] = []
+    for index, (line_index, match) in enumerate(check_positions):
+        next_index = check_positions[index + 1][0] if index + 1 < len(check_positions) else len(lines)
+        detail = "\n".join(lines[line_index + 1 : next_index]).strip()
+        status = match.group("status").upper()
+        item = {
+            "check_name": match.group("name"),
+            "status": status,
+            "detail_summary": _summarize_text(detail),
+            "raw_detail_path": "",
+        }
+        if status == "NG" and len(detail) > SUMMARY_LIMIT:
+            item["raw_detail_path"] = _write_raw_section(output_dir, item["check_name"], detail)
+        items.append(item)
+    return items
+
+
+def _build_gs_check_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    ok_count = sum(1 for item in items if item.get("status") == "OK")
+    ng_count = sum(1 for item in items if item.get("status") == "NG")
+    na_count = sum(1 for item in items if item.get("status") == "NA")
+    unknown_count = sum(1 for item in items if item.get("status") not in {"OK", "NG", "NA"})
+    return {
+        "ok_count": ok_count,
+        "ng_count": ng_count,
+        "na_count": na_count,
+        "unknown_count": unknown_count,
+        "ng_items": [
+            {
+                "check_name": item["check_name"],
+                "status": item["status"],
+                "detail_summary": item["detail_summary"],
+                "raw_detail_path": item["raw_detail_path"],
+            }
+            for item in items
+            if item.get("status") == "NG"
+        ],
+    }
+
+
+def _extract_log_summaries(manifest: dict[str, Any]) -> dict[str, Any]:
+    files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+    fatal_files = list(files.get("fatal_logs") or [])
+    panic_files = list(files.get("panic_logs") or [])
+    return {
+        "fatal_log_files": fatal_files,
+        "panic_log_files": panic_files,
+        "fatal_log_summary": _summarize_log_files(fatal_files, "fatal"),
+        "panic_log_summary": _summarize_log_files(panic_files, "panic"),
+    }
+
+
+def _summarize_log_files(paths: list[str], log_type: str) -> str:
+    if not paths:
+        return "未发现日志文件"
+
+    summaries: list[str] = []
+    for path_text in paths:
+        path = Path(path_text)
+        if not path.exists():
+            summaries.append(f"{path_text}: 未发现日志文件")
+            continue
+        content = _read_text(path).strip()
+        if not content:
+            if log_type == "fatal":
+                summaries.append(f"{path_text}: 未发现 fatal 异常日志")
+            else:
+                summaries.append(f"{path_text}: 未发现 panic 异常日志")
+            continue
+        first_lines = content.splitlines()[:20]
+        summaries.append(f"{path_text}:\n" + "\n".join(first_lines))
+    return "\n\n".join(summaries)
+
+
+def _top_summary(label: str, records: list[dict[str, Any]]) -> str:
+    return f"已解析{len(records)}条{label}记录，YAML最多保留Top {TOP_YAML_LIMIT}" if records else f"未采集到{label}记录"
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def _summarize_text(text: str) -> str:
+    if not text.strip():
+        return "未采集"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    compact = "\n".join(lines[:20])
+    return compact[:SUMMARY_LIMIT] + ("..." if len(compact) > SUMMARY_LIMIT else "")
+
+
+def _write_raw_section(output_dir: Path, check_name: str, detail: str) -> str:
+    raw_dir = output_dir / "raw_sections"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(detail.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", check_name)
+    path = raw_dir / f"{safe_name}_{digest}.txt"
+    path.write_text(detail, encoding="utf-8")
+    return str(path)
+
+
+def _to_float(value: Any, default: Any = "未采集") -> Any:
+    if value is None:
+        return default
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    if not match:
+        return default
+    return float(match.group(0))
+
+
+def _size_to_bytes(value: Any) -> int:
+    if value is None:
+        return 0
+    text = str(value).strip().lower()
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([kmgtp]?b|bytes?)?", text)
+    if not match:
+        return 0
+    number = float(match.group(1))
+    unit = (match.group(2) or "b").lower()
+    multipliers = {
+        "b": 1,
+        "byte": 1,
+        "bytes": 1,
+        "kb": 1024,
+        "mb": 1024**2,
+        "gb": 1024**3,
+        "tb": 1024**4,
+        "pb": 1024**5,
+    }
+    return int(number * multipliers.get(unit, 1))
