@@ -47,7 +47,7 @@ def _section_body(title: str, data: dict[str, Any], default_body: str) -> str:
     analysis = data.get("analysis", {})
     report = data.get("report", {})
     conclusion = data.get("conclusion", {})
-    report_risks = data.get("report_risks") or []
+    risk_details = data.get("risk_details") or {}
     cluster = data.get("cluster", {})
 
     if title == "巡检日期":
@@ -63,9 +63,10 @@ def _section_body(title: str, data: dict[str, Any], default_body: str) -> str:
         return str(sections.get("system_overview") or default_body)
     if title == "第三章 总体情况":
         lines = [f"总体状态：{cluster.get('overall_status', '未采集')}"]
-        if report_risks:
-            lines.append("重点问题：")
-            for risk in report_risks:
+        all_risks = list(risk_details.get("risks") or []) + list(risk_details.get("warnings") or [])
+        if all_risks:
+            lines.append("问题明细：")
+            for risk in all_risks:
                 lines.append(
                     f"[{risk.get('level', '未采集')}] {risk.get('item', '未采集')} - {risk.get('detail', '未采集')}"
                 )

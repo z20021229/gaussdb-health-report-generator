@@ -5,49 +5,52 @@ import yaml
 from src.analyzer import analyze_inspection_data
 
 
-def test_risk_summary_groups_same_disk_risks() -> None:
-    data = _base_data()
-    data["risks"] = []
-    data["nodes"] = [
-        {"ip": "10.0.0.1", "hostname": "n1", "memory": {"usage_percent": 0}, "disks": [{"mounted_on": "/data", "use_percent": 85}], "cpu_daily": {"avg_idle": 80, "max_iowait": 1}},
-        {"ip": "10.0.0.2", "hostname": "n2", "memory": {"usage_percent": 0}, "disks": [{"mounted_on": "/data", "use_percent": 82}], "cpu_daily": {"avg_idle": 80, "max_iowait": 1}},
-    ]
-    analyzed = analyze_inspection_data(data)
-    grouped = [item for item in analyzed["risk_summary"]["grouped"] if item["item"] == "磁盘空间"]
-    assert len(grouped) == 1
-    assert grouped[0]["count"] == 2
-    assert len([risk for risk in analyzed["risks"] if risk["item"] == "磁盘空间"]) == 2
-
-
-def test_report_risks_is_capped_at_ten() -> None:
+def test_risks_and_risk_details_keep_all_entries() -> None:
     data = _base_data()
     data["cluster"]["gs_check_summary"]["ng_items"] = [
         {"check_name": f"CheckDemo{i}", "status": "NG", "detail_summary": f"问题{i}", "raw_detail_path": ""}
-        for i in range(12)
+        for i in range(15)
     ]
     analyzed = analyze_inspection_data(data)
-    assert len(analyzed["report_risks"]) <= 10
+    detail_count = len(analyzed["risk_details"]["risks"]) + len(analyzed["risk_details"]["warnings"])
+    assert len(analyzed["risks"]) == 15
+    assert detail_count == 15
 
 
-def test_report_risks_includes_gs_check_items() -> None:
+def test_risk_summary_counts_levels_correctly() -> None:
     data = _base_data()
-    data["cluster"]["gs_check_summary"]["ng_items"] = [
-        {"check_name": "CheckDirPermissions", "status": "NG", "detail_summary": "目录权限异常", "raw_detail_path": ""}
+    data["nodes"][0]["disks"] = [{"mounted_on": "/data", "use_percent": 85}]
+    data["nodes"].append(
+        {"ip": "10.0.0.2", "hostname": "n2", "memory": {"usage_percent": 0}, "disks": [{"mounted_on": "/data", "use_percent": 75}], "cpu_daily": {"avg_idle": 80, "max_iowait": 1}}
+    )
+    analyzed = analyze_inspection_data(data)
+    assert analyzed["risk_summary"]["total_count"] == len(analyzed["risks"])
+    assert analyzed["risk_summary"]["risk_count"] >= 1
+    assert analyzed["risk_summary"]["warning_count"] >= 1
+
+
+def test_conclusion_suggestions_merge_same_actions() -> None:
+    data = _base_data()
+    data["nodes"] = [
+        {"ip": "10.0.0.1", "hostname": "n1", "memory": {"usage_percent": 0}, "disks": [{"mounted_on": "/data1", "use_percent": 85}], "cpu_daily": {"avg_idle": 80, "max_iowait": 1}},
+        {"ip": "10.0.0.2", "hostname": "n2", "memory": {"usage_percent": 0}, "disks": [{"mounted_on": "/data2", "use_percent": 82}], "cpu_daily": {"avg_idle": 80, "max_iowait": 1}},
     ]
     analyzed = analyze_inspection_data(data)
-    assert any("gs_check -" in item["item"] for item in analyzed["report_risks"])
+    disk_suggestion = next(item for item in analyzed["conclusion"]["suggestions"] if item["item"] == "磁盘空间")
+    assert disk_suggestion["related_count"] == 2
 
 
-def test_real_sample_contains_risk_summary_and_report_risks() -> None:
+def test_real_sample_contains_risk_summary_and_details() -> None:
     root = Path(__file__).resolve().parents[1]
     data = yaml.safe_load((root / "output" / "inspection_data.generated.yaml").read_text(encoding="utf-8"))
     analyzed = analyze_inspection_data(data)
     assert "risks" in analyzed
     assert "risk_summary" in analyzed
-    assert "report_risks" in analyzed
+    assert "risk_details" in analyzed
     assert "summary" in analyzed["conclusion"]
     assert "suggestions" in analyzed["conclusion"]
-    assert len(analyzed["report_risks"]) <= 10
+    detail_count = len(analyzed["risk_details"]["risks"]) + len(analyzed["risk_details"]["warnings"])
+    assert detail_count == len(analyzed["risks"])
 
 
 def _base_data() -> dict:

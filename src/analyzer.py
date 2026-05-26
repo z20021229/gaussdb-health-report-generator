@@ -28,6 +28,7 @@ def analyze_inspection_data(data: dict[str, Any]) -> dict[str, Any]:
 
     analyzed["risks"] = risks
     analyzed["risk_summary"] = _build_risk_summary(risks)
+    analyzed["risk_details"] = _build_risk_details(risks)
     analyzed["report_risks"] = _build_report_risks(risks)
     analyzed["cluster"]["overall_status"] = _overall_status(risks)
     analyzed["conclusion"] = {
@@ -389,33 +390,28 @@ def _build_conclusion_summary(data: dict[str, Any]) -> list[str]:
         f"日志检查方面，fatal 日志检查结果为：{_log_summary_phrase(logs.get('fatal_log_summary', '未采集'))}；panic 日志检查结果为：{_log_summary_phrase(logs.get('panic_log_summary', '未采集'))}。",
         f"gs_check 巡检结果中，OK 项 {gs_check.get('ok_count', 0)} 个，NG 项 {gs_check.get('ng_count', 0)} 个，NA 项 {gs_check.get('na_count', 0)} 个，UNKNOWN 项 {gs_check.get('unknown_count', 0)} 个。",
         f"系统管理维护检查中，大表记录 {len(database.get('large_tables', []))} 条，索引建议 {len(database.get('index_suggestions', []))} 条，未使用索引 {len(database.get('unused_indexes', []))} 条，表膨胀记录 {len(database.get('table_bloat', []))} 条。",
+        f"本次巡检共识别 {len(risks)} 条风险/关注项，其中风险 {risk_levels.get('风险', 0)} 条、关注 {risk_levels.get('关注', 0)} 条，报告后续章节将按类型展示全部问题明细和整改建议。",
     ]
-    if len(risks) > 10:
-        summary.append(
-            f"本次巡检共识别 {len(risks)} 条风险/关注项，其中风险 {risk_levels.get('风险', 0)} 条、关注 {risk_levels.get('关注', 0)} 条，正文展示重点问题，完整明细见结构化结果文件。"
-        )
     return summary
 
 
 def _build_conclusion_suggestions(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ordered: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for level in ["风险", "关注"]:
         for risk in risks:
             if risk.get("level") != level:
                 continue
             key = (str(risk.get("level")), str(risk.get("item")), str(risk.get("suggestion")))
-            if key in seen:
+            if key in grouped:
+                grouped[key]["related_count"] += 1
                 continue
-            seen.add(key)
-            ordered.append(
-                {
-                    "level": risk.get("level", "未采集"),
-                    "item": risk.get("item", "未采集"),
-                    "suggestion": risk.get("suggestion", "未采集"),
-                }
-            )
-    return ordered[:10]
+            grouped[key] = {
+                "level": risk.get("level", "未采集"),
+                "item": risk.get("item", "未采集"),
+                "suggestion": risk.get("suggestion", "未采集"),
+                "related_count": 1,
+            }
+    return list(grouped.values())
 
 
 def _update_textual_summaries(data: dict[str, Any]) -> None:
@@ -434,95 +430,75 @@ def _update_textual_summaries(data: dict[str, Any]) -> None:
 
 
 def _build_risk_summary(risks: list[dict[str, Any]]) -> dict[str, Any]:
-    grouped_entries = _group_risks(risks)
+    item_summary = _build_risk_summary_by_item(risks)
+    source_summary = _build_risk_summary_by_source(risks)
     return {
         "total_count": len(risks),
         "risk_count": sum(1 for risk in risks if risk.get("level") == "风险"),
         "warning_count": sum(1 for risk in risks if risk.get("level") == "关注"),
-        "grouped": [
-            {
-                "item": entry["display_item"],
-                "level": entry["level"],
-                "count": entry["count"],
-                "representative_detail": entry["representative_detail"],
-                "suggestion": entry["suggestion"],
-            }
-            for entry in _sort_grouped_risks(grouped_entries)
-        ],
+        "by_item": item_summary,
+        "by_source": source_summary,
     }
 
 
+def _build_risk_details(risks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    sorted_risks = _sort_full_risks(risks)
+    details = {"risks": [], "warnings": []}
+    for risk in sorted_risks:
+        item = {
+            "level": str(risk.get("level", "未采集")),
+            "item": str(risk.get("item", "未采集")),
+            "detail": str(risk.get("detail", "未采集")),
+            "suggestion": str(risk.get("suggestion", "未采集")),
+            "source": _source_text(risk.get("source")),
+        }
+        if risk.get("level") == "风险":
+            details["risks"].append(item)
+        else:
+            details["warnings"].append(item)
+    return details
+
+
 def _build_report_risks(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped_entries = _sort_grouped_risks(_group_risks(risks))
-    report_entries: list[dict[str, Any]] = []
-    for entry in grouped_entries[:10]:
-        report_entries.append(
-            {
-                "level": entry["level"],
-                "item": entry["display_item"],
-                "detail": entry["representative_detail"],
-                "suggestion": entry["suggestion"],
-                "source": entry["source_text"],
-                "count": entry["count"],
-            }
-        )
-    return report_entries
+    return _sort_full_risks(risks)
 
 
-def _group_risks(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+def _build_risk_summary_by_item(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
     for risk in risks:
-        display_item = _group_display_item(risk)
-        grouping_token = _grouping_token(risk)
-        key = (display_item, str(risk.get("suggestion", "")), grouping_token)
-        entry = grouped.get(key)
-        if entry is None:
-            grouped[key] = {
-                "display_item": display_item,
-                "level": str(risk.get("level", "关注")),
-                "count": 1,
-                "representative_detail": str(risk.get("detail", "未采集")),
-                "suggestion": str(risk.get("suggestion", "未采集")),
-                "source_text": _source_text(risk.get("source")),
-                "priority": _report_priority(risk),
-            }
-            continue
-        entry["count"] += 1
-        if _level_rank(str(risk.get("level", "关注"))) > _level_rank(entry["level"]):
-            entry["level"] = str(risk.get("level", "关注"))
-        if len(str(risk.get("detail", ""))) > len(entry["representative_detail"]):
-            entry["representative_detail"] = str(risk.get("detail", "未采集"))
-        if not entry["source_text"]:
-            entry["source_text"] = _source_text(risk.get("source"))
-        entry["priority"] = min(entry["priority"], _report_priority(risk))
-    return list(grouped.values())
+        item = str(risk.get("item", "未采集"))
+        entry = grouped.setdefault(item, {"item": item, "risk_count": 0, "warning_count": 0, "total_count": 0})
+        entry["total_count"] += 1
+        if risk.get("level") == "风险":
+            entry["risk_count"] += 1
+        elif risk.get("level") == "关注":
+            entry["warning_count"] += 1
+    return sorted(grouped.values(), key=lambda item: (-item["risk_count"], -item["warning_count"], item["item"]))
 
 
-def _sort_grouped_risks(grouped_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_risk_summary_by_source(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for risk in risks:
+        source = _source_group_label(risk)
+        entry = grouped.setdefault(source, {"source": source, "risk_count": 0, "warning_count": 0, "total_count": 0})
+        entry["total_count"] += 1
+        if risk.get("level") == "风险":
+            entry["risk_count"] += 1
+        elif risk.get("level") == "关注":
+            entry["warning_count"] += 1
+    return sorted(grouped.values(), key=lambda item: (-item["risk_count"], -item["warning_count"], item["source"]))
+
+
+def _sort_full_risks(risks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
-        grouped_entries,
-        key=lambda entry: (
-            -_level_rank(entry["level"]),
-            entry["priority"],
-            -entry["count"],
-            entry["display_item"],
+        risks,
+        key=lambda risk: (
+            -_level_rank(str(risk.get("level", ""))),
+            _report_priority(risk),
+            str(risk.get("item", "")),
+            str(risk.get("detail", "")),
         ),
     )
-
-
-def _group_display_item(risk: dict[str, Any]) -> str:
-    item = str(risk.get("item", "未采集"))
-    if item == "gs_check 巡检项":
-        check_name = str((risk.get("source") or {}).get("check_name", "")).strip()
-        return f"gs_check - {check_name}" if check_name else item
-    return item
-
-
-def _grouping_token(risk: dict[str, Any]) -> str:
-    item = str(risk.get("item", ""))
-    if item == "gs_check 巡检项":
-        return str((risk.get("source") or {}).get("check_name", "")).strip()
-    return item
 
 
 def _report_priority(risk: dict[str, Any]) -> int:
@@ -551,6 +527,23 @@ def _source_text(source: Any) -> str:
                 parts.append(f"{key}={value}")
         return "; ".join(parts)
     return ""
+
+
+def _source_group_label(risk: dict[str, Any]) -> str:
+    item = str(risk.get("item", "未采集"))
+    source = risk.get("source")
+    if item == "gs_check 巡检项" and isinstance(source, dict):
+        check_name = str(source.get("check_name", "")).strip()
+        return f"gs_check:{check_name}" if check_name else "gs_check"
+    if item in {"fatal 日志", "panic 日志"}:
+        return "日志检查"
+    if item in {"集群总体状态", "高可用同步", "复制槽状态", "复制槽延迟"}:
+        return "数据库高可用"
+    if item in {"磁盘空间", "CPU 使用率", "IO 等待", "内存使用率"}:
+        return "系统资源"
+    if item in {"大表容量", "索引优化", "未使用索引", "表膨胀"}:
+        return "系统管理维护"
+    return item
 
 
 def _risk_level_counts(risks: list[dict[str, Any]]) -> dict[str, int]:
