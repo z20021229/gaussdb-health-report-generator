@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from .analyzer import analyze_minimal
+from .analyzer import analyze_inspection_data
 from .archive_extractor import ArchiveExtractionError, extract_package, prepare_workdir
 from .inspection_parser import parse_inspection_files
 from .renderer import render_docx
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     data["report"]["source_package"] = str(input_path)
     data["report"]["template_file"] = str(template_path)
-    data = analyze_minimal(data)
+    data = analyze_inspection_data(data)
 
     yaml_path = DEFAULT_YAML_OUTPUT
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
