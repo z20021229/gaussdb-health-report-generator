@@ -36,37 +36,48 @@
 巡检包 -> 解压 -> 解析 -> 风险分析 -> YAML -> Word 报告
 ```
 
+## 安装依赖
+
+建议在虚拟环境中安装依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
 ## 运行命令示例
 
-当前阶段仅建立项目规范和需求说明，尚未实现正式命令行工具。后续目标命令示例如下：
+第一阶段已提供最小可运行命令行流程。该流程会检查输入文件和模板文件是否存在，创建 `output/` 与 `workdir/`，生成最小版结构化 YAML，并输出一个包含基础章节结构的 Word 报告。第一阶段不会解析样例巡检包中的真实客户数据。
 
 ```powershell
-python -m gaussdb_report generate `
-  --input .\samples\inspection_package.rar `
+python -m src.cli `
+  --input .\samples\收益所有人.rar `
   --template .\templates\GaussDB数据库健康诊断报告.docx `
-  --output .\output\GaussDB数据库健康诊断报告.docx
+  --output .\output\收益所有人_GaussDB数据库健康诊断报告.docx
 ```
 
-也可以分阶段运行：
+运行后计划生成：
+
+```text
+output/inspection_data.generated.yaml
+output/收益所有人_GaussDB数据库健康诊断报告.docx
+```
+
+## 测试
 
 ```powershell
-python -m gaussdb_report unpack --input .\samples\inspection_package.rar --output .\work\unpacked
-python -m gaussdb_report parse --input .\work\unpacked --output .\output\inspection.yaml
-python -m gaussdb_report render --data .\output\inspection.yaml --output .\output\GaussDB数据库健康诊断报告.docx
+pytest
 ```
-
-以上命令为规划示例，实际参数以后续实现为准。
 
 ## 后续开发阶段
 
-1. 建立 Python 项目骨架、依赖管理和命令行入口。
+1. 建立 Python 项目骨架、依赖管理和命令行入口。已完成第一版。
 2. 实现巡检包自动解压，支持 `.rar`、`.tar.gz`、`.zip` 等格式。
 3. 实现文件清单扫描，识别文本、HTML、日志和结构化数据文件。
 4. 定义统一 YAML schema，承载客户、实例、节点、指标、风险和附录路径。
 5. 开发通用解析器，避免依赖单一客户文件名、单一 IP 或单一节点数量。
 6. 实现风险分析规则，将解析结果转换为风险等级、问题说明和整改建议。
 7. 基于 Word 样例格式生成正式 GaussDB 数据库健康诊断报告。
-8. 建立测试体系，覆盖解析成功、字段缺失、多节点、多格式和异常输入场景。
+8. 扩展测试体系，覆盖解析成功、字段缺失、多节点、多格式和异常输入场景。
 9. 持续提升解析覆盖率，并保持工具在不完整输入下仍可运行。
 
 ## 开发约束

@@ -1,0 +1,9 @@
+output/*
+!output/.gitkeep
+
+workdir/*
+!workdir/.gitkeep
+
+__pycache__/
+.pytest_cache/
+*.py[cod]

@@ -1,0 +1,6 @@
+python-docx
+pyyaml
+beautifulsoup4
+lxml
+pytest
+rarfile
