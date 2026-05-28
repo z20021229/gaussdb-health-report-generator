@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     data["report"]["source_package"] = str(input_path)
     data["report"]["template_file"] = str(template_path)
+    data["report"]["extracted_manifest_path"] = str(manifest_path)
     data = analyze_inspection_data(data)
     evidence_images = build_evidence_images(
         data=data,

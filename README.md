@@ -124,3 +124,8 @@ pytest
 - 解析失败不得编造内容，只能输出“未采集”或“未提供”。
 - 每次功能修改后必须同步更新 README 和测试。
 - 优先保证工具可运行，再逐步提升解析深度和报告质量。
+## 当前报告输出说明
+- Word 报告会按章节展示全部 `risk_details.risks` 与全部 `risk_details.warnings`，不会按 Top N 截断。
+- Word 报告会优先插入 `output/evidence_images/` 中成功生成的 `section_text` 截图，并在附录中说明 HTML/WDR 截图的成功或失败状态。
+- 如果某个检查章节未匹配到原始截图，报告正文会明确写出“未找到该检查项原始截图”。
+- HTML/WDR 截图失败不会阻断 Word 报告生成，失败原因会写入 `output/evidence_images_manifest.yaml`，并同步写入报告附录。
