@@ -49,6 +49,7 @@ def _section_body(title: str, data: dict[str, Any], default_body: str) -> str:
     conclusion = data.get("conclusion", {})
     risk_details = data.get("risk_details") or {}
     cluster = data.get("cluster", {})
+    evidence_images = data.get("evidence_images") or {}
 
     if title == "巡检日期":
         return str(report.get("inspection_date") or inspection.get("date") or default_body)
@@ -59,7 +60,8 @@ def _section_body(title: str, data: dict[str, Any], default_body: str) -> str:
         return str(data.get("summary", {}).get("conclusion") or default_body)
     if title == "第二章 系统概况":
         if isinstance(sections.get("parsed_sections"), list):
-            return f"已解析巡检章节数量：{len(sections['parsed_sections'])}"
+            items = evidence_images.get("items") or []
+            return f"已解析巡检章节数量：{len(sections['parsed_sections'])}\n已生成证据图片数量：{len(items)}"
         return str(sections.get("system_overview") or default_body)
     if title == "第三章 总体情况":
         lines = [f"总体状态：{cluster.get('overall_status', '未采集')}"]

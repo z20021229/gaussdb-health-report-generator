@@ -42,6 +42,7 @@
 
 ```powershell
 python -m pip install -r requirements.txt
+python -m playwright install chromium
 ```
 
 ## 本地解压依赖
@@ -56,7 +57,7 @@ python -m pip install -r requirements.txt
 
 ## 运行命令示例
 
-当前流程会检查输入文件和模板文件是否存在，创建 `output/` 与 `workdir/`，将巡检包递归解压到 `workdir/extracted/`，生成解压文件清单，解析所有 `inspection_rec.txt` 的巡检章节，并输出一个包含基础章节结构的 Word 报告。当前阶段只做通用章节分段，不做复杂风险判断，也不会硬编码样例巡检包中的真实客户数据。
+当前流程会检查输入文件和模板文件是否存在，创建 `output/` 与 `workdir/`，将巡检包递归解压到 `workdir/extracted/`，生成解压文件清单，解析所有 `inspection_rec.txt` 的巡检章节，执行风险分析，并生成证据图片清单与基础 Word 报告。当前阶段不会硬编码样例巡检包中的真实客户数据。
 
 ```powershell
 python -m src.cli `
@@ -70,6 +71,8 @@ python -m src.cli `
 ```text
 output/extracted_manifest.yaml
 output/inspection_data.generated.yaml
+output/evidence_images_manifest.yaml
+output/evidence_images/
 output/收益所有人_GaussDB数据库健康诊断报告.docx
 workdir/extracted/
 ```
@@ -83,6 +86,14 @@ workdir/extracted/
 当前已解析系统管理维护类检查，包括大表、索引建议、未使用索引、表膨胀和 `gs_check` 巡检信息。长明细不会完整写入 YAML，`gs_check` 的超长 NG 详情会保存到 `output/raw_sections/` 并在 YAML 中记录路径。fatal/panic 日志只保留摘要和文件路径。
 
 当前已完成第一版分析器能力，可基于结构化巡检结果自动生成风险清单、巡检总结、整改建议和总体状态。所有结论均来自已解析的 YAML 数据，不依赖样例中的固定 IP、数据库名或预设风险结论。
+
+当前已支持证据图片自动构建：
+
+- `inspection_rec.txt` 各章节原始输出自动渲染为等宽文本图片
+- `wdrNode_*.html`、`wdrCluster_*.html` 以及其他 HTML 文件尝试通过 Playwright 截图
+- 巡检包中的 `.png`、`.jpg`、`.jpeg`、`.webp` 自动复制到 `output/evidence_images/`
+
+如果 Playwright Python 包或 Chromium 浏览器不可用，HTML 截图会在 `output/evidence_images_manifest.yaml` 中记录 `failed/skipped`，但不会阻断报告生成。为了减少中文乱码，建议本地环境具备 `Microsoft YaHei`、`SimHei`、`Noto Sans CJK` 或类似中文字体。
 
 ## 测试
 
@@ -100,11 +111,12 @@ pytest
 6. 解析数据库运行状态、高可用状态、复制槽状态和数据库列表。已完成第一版。
 7. 解析系统管理维护类检查、`gs_check` 和 fatal/panic 日志摘要。已完成第一版。
 8. 实现风险分析规则，将解析结果转换为风险等级、问题说明和整改建议。已完成第一版。
-9. 定义统一 YAML schema，承载客户、实例、节点、指标、风险和附录路径。
-10. 开发通用解析器，避免依赖单一客户文件名、单一 IP 或单一节点数量。
-11. 基于 Word 样例格式生成正式 GaussDB 数据库健康诊断报告。
-12. 扩展测试体系，覆盖解析成功、字段缺失、多节点、多格式和异常输入场景。
-13. 持续提升解析覆盖率，并保持工具在不完整输入下仍可运行。
+9. 自动生成巡检证据图片与证据清单。已完成第一版。
+10. 定义统一 YAML schema，承载客户、实例、节点、指标、风险和附录路径。
+11. 开发通用解析器，避免依赖单一客户文件名、单一 IP 或单一节点数量。
+12. 基于 Word 样例格式生成正式 GaussDB 数据库健康诊断报告。
+13. 扩展测试体系，覆盖解析成功、字段缺失、多节点、多格式和异常输入场景。
+14. 持续提升解析覆盖率，并保持工具在不完整输入下仍可运行。
 
 ## 开发约束
 
