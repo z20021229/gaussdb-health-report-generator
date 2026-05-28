@@ -10,13 +10,59 @@ from src.inspection_parser import parse_inspection_files
 from src.renderer import render_docx
 
 
-def test_render_docx_uses_template_chapters_without_appendix(tmp_path: Path) -> None:
+BANNED_WORDS = [
+    "workdir",
+    "output",
+    "raw_sections",
+    "evidence_images",
+    "extracted_manifest",
+    "evidence_images_manifest",
+    "inspection_data.generated.yaml",
+    ".yaml",
+    "raw_detail_path",
+    "source_file",
+    "manifest",
+    "parser",
+    "analyzer",
+    "renderer",
+    "程序解析",
+    "代码发现",
+    "YAML",
+]
+
+EXPECTED_CHAPTERS = [
+    "第一章 总结",
+    "第二章 系统概况",
+    "2.1. 操作系统版本检查",
+    "2.2. 数据库版本检查",
+    "2.3. cpu 核数信息",
+    "第三章 总体情况",
+    "3.1. 集群运行情况",
+    "3.2. 磁盘空间概况",
+    "第四章 高可用检查",
+    "4.1. 集群高可用状态检查",
+    "4.2. CPU 一天使用信息",
+    "4.3. 数据库运行状态",
+    "4.4. 复制槽状态",
+    "第五章 参数检查",
+    "5.1. 函数运行状态检查",
+    "5.2. 数据库信息检查",
+    "5.3. gs_collector 信息收集",
+    "第六章 系统管理维护",
+    "6.1. 大表检查",
+    "6.2. 未使用的索引",
+    "6.3. 索引建议",
+    "6.4. 表膨胀检查",
+]
+
+
+def test_render_docx_uses_reference_chapter_structure_without_appendix(tmp_path: Path) -> None:
     image_path = _create_image(tmp_path / "evidence" / "os.png")
     data = _base_report_data(
         evidence_items=[
             {
                 "type": "section_text",
-                "title": "操作系统信息 - 第1页",
+                "title": "操作系统信息 - 第 1 页",
                 "section_name": "操作系统信息",
                 "source_file": "sample/inspection_rec.txt",
                 "image_path": str(image_path),
@@ -31,32 +77,15 @@ def test_render_docx_uses_template_chapters_without_appendix(tmp_path: Path) -> 
 
     document = Document(output_path)
     text = _document_text(document)
-
-    for chapter in [
-        "第一章 总结",
-        "第二章 系统概况",
-        "第三章 总体情况",
-        "第四章 高可用检查",
-        "第五章 参数检查",
-        "第六章 系统管理维护",
-    ]:
+    for chapter in EXPECTED_CHAPTERS:
         assert chapter in text
-
-    assert "附录 原始依据与截图" not in text
-    for banned in [
-        "workdir",
-        "output",
-        "raw_sections",
-        "manifest",
-        ".yaml",
-        "parser",
-        "analyzer",
-        "renderer",
-        "风险级问题明细",
-        "关注级问题明细",
-        "raw_detail_path",
-    ]:
+    assert "附录" not in text
+    assert "风险级问题明细" not in text
+    assert "关注级问题明细" not in text
+    assert "整改建议汇总" not in text
+    for banned in BANNED_WORDS:
         assert banned not in text
+    assert len(document.inline_shapes) == 1
 
 
 def test_render_docx_marks_disk_25_percent_as_good(tmp_path: Path) -> None:
@@ -69,8 +98,10 @@ def test_render_docx_marks_disk_25_percent_as_good(tmp_path: Path) -> None:
     render_docx(data, output_path)
 
     text = _document_text(Document(output_path))
-    assert "磁盘空间整体状态为良好" in text
-    assert "风险" not in text.split("3.2 磁盘空间概况", 1)[1][:120]
+    disk_section = text.split("3.2. 磁盘空间概况", 1)[1]
+    assert "整体状态为良好" in disk_section
+    assert "磁盘空间充足" in disk_section
+    assert "风险" not in disk_section[:180]
 
 
 def test_database_version_without_screenshot_does_not_borrow_database_info_image(tmp_path: Path) -> None:
@@ -79,7 +110,7 @@ def test_database_version_without_screenshot_does_not_borrow_database_info_image
         evidence_items=[
             {
                 "type": "section_text",
-                "title": "数据库信息检查 - 第1页",
+                "title": "数据库信息检查 - 第 1 页",
                 "section_name": "数据库信息检查",
                 "source_file": "sample/inspection_rec.txt",
                 "image_path": str(db_info_image),
@@ -94,23 +125,9 @@ def test_database_version_without_screenshot_does_not_borrow_database_info_image
 
     document = Document(output_path)
     text = _document_text(document)
-    assert "2.2 数据库版本检查" in text
-    assert "检查结果未采集。" in text
+    db_version_section = text.rsplit("2.2. 数据库版本检查", 1)[1].split("2.3. cpu 核数信息", 1)[0]
+    assert "检查结果未采集。" in db_version_section
     assert len(document.inline_shapes) == 1
-
-
-def test_gs_check_and_table_bloat_stay_in_their_own_chapters(tmp_path: Path) -> None:
-    data = _base_report_data()
-    output_path = tmp_path / "sections.docx"
-
-    render_docx(data, output_path)
-
-    text = _document_text(Document(output_path))
-    assert "第五章 参数检查" in text
-    assert "CheckDirPermissions" in text
-    assert "第六章 系统管理维护" in text
-    assert "public" in text
-    assert "6.4 表膨胀检查" in text
 
 
 def test_empty_fatal_and_panic_logs_do_not_render_as_exceptions(tmp_path: Path) -> None:
@@ -120,24 +137,36 @@ def test_empty_fatal_and_panic_logs_do_not_render_as_exceptions(tmp_path: Path) 
     render_docx(data, output_path)
 
     text = _document_text(Document(output_path))
-    assert "未发现 fatal 异常日志" in text
-    assert "未发现 panic 异常日志" in text
+    assert "没有严重的异常和告警。" in text
     assert "日志文件缺失" not in text
+    assert "发现需关注日志信息" not in text
+
+
+def test_gs_check_and_table_bloat_stay_in_their_own_chapters(tmp_path: Path) -> None:
+    data = _base_report_data()
+    output_path = tmp_path / "sections.docx"
+
+    render_docx(data, output_path)
+
+    text = _document_text(Document(output_path))
+    chapter_one = text.rsplit("第一章 总结", 1)[1].split("第二章 系统概况", 1)[0]
+    chapter_five = text.rsplit("第五章 参数检查", 1)[1].split("第六章 系统管理维护", 1)[0]
+    chapter_six = text.rsplit("第六章 系统管理维护", 1)[1]
+    assert "CheckDirPermissions" not in chapter_one
+    assert "CheckDirPermissions" in chapter_five
+    assert "表膨胀检查发现" in chapter_six
 
 
 def test_render_real_sample_docx_without_engineering_terms(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     sample_input = root / "samples" / "收益所有人.rar"
-    template_path = root / "templates" / "GaussDB数据库健康诊断报告.docx"
     workdir = tmp_path / "workdir"
-    output_dir = tmp_path / "output"
+    output_dir = tmp_path / "report_out"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = extract_package(str(sample_input), str(workdir))
     inspection_files = manifest.get("files", {}).get("inspection_rec", [])
     data = parse_inspection_files(inspection_files, manifest=manifest, output_dir=output_dir)
-    data["report"]["source_package"] = str(sample_input)
-    data["report"]["template_file"] = str(template_path)
     data = analyze_inspection_data(data)
     evidence = build_evidence_images(data, manifest, str(output_dir))
     data["evidence_images"] = {
@@ -151,31 +180,20 @@ def test_render_real_sample_docx_without_engineering_terms(tmp_path: Path) -> No
 
     document = Document(output_path)
     text = _document_text(document)
-    assert "附录 原始依据与截图" not in text
-    for banned in [
-        "workdir",
-        "output",
-        "raw_sections",
-        "evidence_images_manifest",
-        "inspection_data.generated.yaml",
-        "raw_detail_path",
-        "source_file：",
-        "来源文件：",
-    ]:
+    for chapter in EXPECTED_CHAPTERS:
+        assert chapter in text
+    assert "附录" not in text
+    for banned in BANNED_WORDS:
         assert banned not in text
+    assert len(document.inline_shapes) > 0
 
 
-def _base_report_data(
-    *,
-    evidence_items: list[dict] | None = None,
-) -> dict:
-    data = {
+def _base_report_data(*, evidence_items: list[dict] | None = None) -> dict:
+    return {
         "report": {
             "title": "GaussDB 数据库健康诊断报告",
             "inspector": "未提供",
             "inspection_date": "未采集",
-            "source_package": "samples/demo.rar",
-            "source_files": ["samples/demo_20260521.txt"],
         },
         "nodes": [
             {
@@ -186,9 +204,6 @@ def _base_report_data(
                 "architecture": "x86_64",
                 "cpu_model": "CPU Demo",
                 "cpu_cores": 16,
-                "threads_per_core": "2",
-                "sockets": "1",
-                "numa_nodes": "1",
                 "memory": {"usage_percent": 50.0},
                 "disks": [
                     {
@@ -200,11 +215,7 @@ def _base_report_data(
                         "mounted_on": "/data",
                     }
                 ],
-                "disk_summary": {
-                    "max_disk_use_percent": 25,
-                    "data_disk_use_percent": 25,
-                    "max_disk_mount": "/data",
-                },
+                "disk_summary": {"max_disk_use_percent": 25},
                 "cpu_daily": {
                     "avg_user": 8.2,
                     "avg_system": 2.3,
@@ -218,27 +229,13 @@ def _base_report_data(
         "cluster": {
             "cluster_status": "未采集",
             "overall_status": "关注",
-            "ha_status": [
-                {"client_addr": "10.0.0.2", "sync_state": "Sync", "pg_xlog_location_diff": "0"}
-            ],
-            "ha_summary": "已完成高可用状态检查。",
-            "replication_slots": [
-                {"slot_name": "slot_demo", "slot_type": "physical", "active": "true", "delay_lsn": "0"}
-            ],
-            "replication_slot_summary": "复制槽状态正常。",
+            "ha_status": [{"client_addr": "10.0.0.2", "sync_state": "Sync", "pg_xlog_location_diff": "0"}],
+            "replication_slots": [{"slot_name": "slot_demo", "slot_type": "physical", "active": "true", "delay_lsn": "0"}],
             "gs_check_summary": {
                 "ok_count": 3,
                 "ng_count": 1,
                 "na_count": 0,
                 "unknown_count": 0,
-                "ng_items": [
-                    {
-                        "check_name": "CheckDirPermissions",
-                        "status": "NG",
-                        "detail_summary": "目录权限需要进一步核查",
-                        "raw_detail_path": "ignored",
-                    }
-                ],
                 "ng_display_items": [
                     {
                         "check_name": "CheckDirPermissions",
@@ -257,92 +254,30 @@ def _base_report_data(
         },
         "database": {
             "version": "GaussDB 5.x",
-            "running_status": {
-                "records": [
-                    {
-                        "checktime": "2026-05-28 10:00:00",
-                        "uptime": "10 days",
-                        "lsn": "0/16B6C50",
-                        "insert_lsn": "0/16B6C50",
-                        "write_lsn": "0/16B6C50",
-                        "is_in_recovery": "false",
-                    }
-                ],
-                "summary": "数据库运行状态检查正常。",
-            },
-            "databases": [
-                {
-                    "datname": "postgres",
-                    "readable_size": "512.00 MB",
-                    "age": "12345",
-                    "is_template": "f",
-                    "allow_conn": "t",
-                    "conn_limit": "-1",
-                }
-            ],
-            "large_tables": [
-                {
-                    "datname": "postgres",
-                    "nspname": "public",
-                    "relname": "big_table",
-                    "relsize": "1 GB",
-                    "indexsize": "256 MB",
-                }
-            ],
-            "large_tables_summary": "已识别 1 条大表记录",
+            "running_status": {"records": [{"is_in_recovery": "false"}]},
+            "databases": [{"datname": "demo", "readable_size": "10GB"}],
+            "large_tables": [{"relname": "large_table"}],
+            "index_suggestions": [{"tablename": "demo_table"}],
             "unused_indexes": [],
-            "unused_indexes_summary": "未发现未使用索引",
-            "index_suggestions": [
-                {
-                    "tablename": "public.demo",
-                    "table_size": "512 MB",
-                    "seq_scan": 100,
-                    "idx_scan": 2,
-                    "rate": "50:1",
-                }
-            ],
-            "index_suggestions_summary": "已识别 1 条索引建议记录",
-            "table_bloat": [
-                {
-                    "schemaname": "public",
-                    "relname": "demo",
-                    "n_live_tup": 1000,
-                    "n_dead_tup": 200,
-                    "dead_rate": "20%",
-                }
-            ],
-            "table_bloat_summary": "已识别 1 条表膨胀记录",
+            "table_bloat": [{"schemaname": "public", "relname": "t_demo", "dead_rate": "25%"}],
         },
         "logs": {
             "fatal_log_summary": "未发现 fatal 异常日志",
             "panic_log_summary": "未发现 panic 异常日志",
         },
-        "risks": [
-            {
-                "level": "关注",
-                "item": "表膨胀",
-                "detail": "对象 public.demo 死元组占比为 20%",
-                "suggestion": "建议结合维护窗口执行 VACUUM / ANALYZE 或表维护操作。",
-                "source": {"schemaname": "public", "relname": "demo"},
-            }
-        ],
-        "evidence_images": {
-            "items": evidence_items or [],
-        },
+        "evidence_images": {"items": evidence_items or []},
     }
-    return data
 
 
 def _create_image(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (120, 80), "white").save(path)
+    Image.new("RGB", (200, 100), color="white").save(path)
     return path
 
 
 def _document_text(document: Document) -> str:
-    parts = [paragraph.text for paragraph in document.paragraphs]
+    paragraphs = [paragraph.text for paragraph in document.paragraphs]
     for table in document.tables:
         for row in table.rows:
-            for cell in row.cells:
-                parts.append(cell.text)
-    return "\n".join(parts)
+            paragraphs.extend(cell.text for cell in row.cells)
+    return "\n".join(paragraphs)

@@ -1,54 +1,48 @@
-"""Word report rendering helpers for the client-facing GaussDB report."""
+"""Render a formal customer-facing GaussDB health diagnosis Word report."""
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from docx import Document
-from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 
 
-IMAGE_WIDTH = Inches(6)
-CHAPTERS = [
-    "第一章 总结",
-    "第二章 系统概况",
-    "第三章 总体情况",
-    "第四章 高可用检查",
-    "第五章 参数检查",
-    "第六章 系统管理维护",
-]
+IMAGE_WIDTH = Inches(6.0)
+NOT_COLLECTED = "未采集"
 
-SECTION_ALIASES = {
-    "CPU核数信息": ["CPU核数信息", "CPU型号信息"],
-    "磁盘空间概况": ["磁盘空间大小", "DN占用空间大小", "ETCD占用空间大小"],
-    "gs_collector 信息收集": ["gs_collector信息", "gs collector"],
-}
 
-BANNED_WORDS = [
-    "workdir",
-    "output",
-    "raw_sections",
-    "evidence_images",
-    "extracted_manifest",
-    "evidence_images_manifest",
-    "inspection_data.generated.yaml",
-    ".yaml",
-    "manifest",
-    "parser",
-    "analyzer",
-    "renderer",
-    "source_file：",
-    "来源文件：workdir",
+CHAPTER_TOC = [
+    ("第一章 总结", "1"),
+    ("第二章 系统概况", "2"),
+    ("2.1. 操作系统版本检查", "2"),
+    ("2.2. 数据库版本检查", "3"),
+    ("2.3. cpu 核数信息", "3"),
+    ("第三章 总体情况", "4"),
+    ("3.1. 集群运行情况", "4"),
+    ("3.2. 磁盘空间概况", "4"),
+    ("第四章 高可用检查", "5"),
+    ("4.1. 集群高可用状态检查", "5"),
+    ("4.2. CPU 一天使用信息", "6"),
+    ("4.3. 数据库运行状态", "6"),
+    ("4.4. 复制槽状态", "7"),
+    ("第五章 参数检查", "8"),
+    ("5.1. 函数运行状态检查", "8"),
+    ("5.2. 数据库信息检查", "8"),
+    ("5.3. gs_collector 信息收集", "9"),
+    ("第六章 系统管理维护", "10"),
+    ("6.1. 大表检查", "10"),
+    ("6.2. 未使用的索引", "11"),
+    ("6.3. 索引建议", "11"),
+    ("6.4. 表膨胀检查", "12"),
 ]
 
 
 def render_docx(data: dict[str, Any], output_path: Path) -> Path:
-    """Render the formal customer delivery report."""
+    """Create the final report docx and return the saved path."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     document = Document()
     _configure_document(document)
@@ -63,20 +57,26 @@ def render_docx(data: dict[str, Any], output_path: Path) -> Path:
     _render_chapter_five(document, data)
     _render_chapter_six(document, data)
 
-    target_path = output_path
     try:
-        document.save(target_path)
-        return target_path
+        document.save(output_path)
+        return output_path
     except PermissionError:
-        fallback_path = output_path.with_name(f"{output_path.stem}_latest{output_path.suffix}")
-        document.save(fallback_path)
-        return fallback_path
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        for index in range(1, 20):
+            suffix = f"_latest_{timestamp}" if index == 1 else f"_latest_{timestamp}_{index}"
+            fallback_path = output_path.with_name(f"{output_path.stem}{suffix}{output_path.suffix}")
+            try:
+                document.save(fallback_path)
+                return fallback_path
+            except PermissionError:
+                continue
+        raise
 
 
 def _configure_document(document: Document) -> None:
     section = document.sections[0]
-    section.top_margin = Inches(1)
-    section.bottom_margin = Inches(1)
+    section.top_margin = Inches(1.0)
+    section.bottom_margin = Inches(1.0)
     section.left_margin = Inches(0.9)
     section.right_margin = Inches(0.9)
 
@@ -87,362 +87,223 @@ def _configure_document(document: Document) -> None:
 
 def _render_cover(document: Document, data: dict[str, Any]) -> None:
     report = data.get("report", {})
-    title = str(report.get("title") or "GaussDB 数据库健康诊断报告")
-    inspector = str(report.get("inspector") or "未提供")
-
-    paragraph = document.add_paragraph()
-    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = paragraph.add_run(title)
-    run.bold = True
-    run.font.size = Pt(24)
+    title = _text(report.get("title"), "GaussDB 数据库健康诊断报告")
+    inspector = _text(report.get("inspector"), "未提供")
 
     document.add_paragraph("")
     document.add_paragraph("")
+    title_para = document.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_run = title_para.add_run(title)
+    title_run.bold = True
+    title_run.font.size = Pt(24)
 
-    inspector_paragraph = document.add_paragraph()
-    inspector_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    inspector_paragraph.add_run(f"巡检人：{inspector}")
+    for _ in range(8):
+        document.add_paragraph("")
 
+    inspector_para = document.add_paragraph()
+    inspector_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    inspector_para.add_run(f"巡检人：{inspector}")
     document.add_page_break()
 
 
 def _render_inspection_date_page(document: Document, data: dict[str, Any]) -> None:
-    inspection_date = _resolve_inspection_date(data.get("report", {}))
-
     _add_heading(document, "巡检日期", level=1)
-    document.add_paragraph(f"巡检日期：{inspection_date}")
+    document.add_paragraph(f"巡检日期：{_inspection_date(data)}")
     document.add_page_break()
 
 
 def _render_toc(document: Document) -> None:
     _add_heading(document, "目录", level=1)
-    for chapter in CHAPTERS:
-        document.add_paragraph(chapter)
+    for title, page in CHAPTER_TOC:
+        dots = "." * max(4, 42 - len(title))
+        document.add_paragraph(f"{title}{dots}{page}")
     document.add_page_break()
 
 
 def _render_chapter_one(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第一章 总结", level=1)
-
-    summary_lines = _chapter_one_summary_lines(data)
-    for index, line in enumerate(summary_lines, start=1):
+    document.add_paragraph("本次巡检的总结如下：")
+    for index, line in enumerate(_summary_lines(data), start=1):
         document.add_paragraph(f"{index}. {line}")
-
-    major_findings = _major_findings(data)
-    if major_findings:
-        document.add_paragraph("巡检发现：")
-        for finding in major_findings:
-            document.add_paragraph(f"- {finding}")
-
     document.add_page_break()
 
 
 def _render_chapter_two(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第二章 系统概况", level=1)
-    nodes = data.get("nodes", [])
-    database = data.get("database", {})
 
-    _add_heading(document, "2.1 操作系统版本检查", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["节点", "主机名", "操作系统版本", "架构"],
-        [
-            [
-                _node_label(node),
-                node.get("hostname", "未采集"),
-                node.get("os_version", "未采集"),
-                node.get("architecture", "未采集"),
-            ]
-            for node in nodes
-        ] or [["未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[1.2, 1.6, 2.0, 1.2],
+        data,
+        "2.1. 操作系统版本检查",
+        ["操作系统信息"],
+        _os_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["操作系统信息"])
-    _add_conclusion(document, _os_conclusion(data))
 
-    _add_heading(document, "2.2 数据库版本检查", level=2)
-    document.add_paragraph(f"数据库版本：{database.get('version', '未采集')}")
-    _render_section_evidence(document, data, ["数据库版本检查"], exact_only=True, empty_message="检查结果未采集。")
+    database = data.get("database", {})
+    _add_heading(document, "2.2. 数据库版本检查", level=2)
+    document.add_paragraph(f"数据库版本：{_text(database.get('version'))}")
+    _render_section_evidence(
+        document,
+        data,
+        ["数据库版本检查"],
+        exact_only=True,
+        empty_message="检查结果未采集。",
+    )
     _add_conclusion(document, _database_version_conclusion(data))
 
-    _add_heading(document, "2.3 CPU 核数信息", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["节点", "CPU 型号", "CPU 核数", "每核线程数", "Socket 数", "NUMA 节点数"],
-        [
-            [
-                _node_label(node),
-                node.get("cpu_model", "未采集"),
-                node.get("cpu_cores", "未采集"),
-                node.get("threads_per_core", "未采集"),
-                node.get("sockets", "未采集"),
-                node.get("numa_nodes", "未采集"),
-            ]
-            for node in nodes
-        ] or [["未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[1.0, 2.2, 0.9, 1.0, 0.8, 1.0],
+        data,
+        "2.3. cpu 核数信息",
+        ["CPU核数信息", "CPU型号信息"],
+        _cpu_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["CPU核数信息"])
-    _add_conclusion(document, _cpu_conclusion(data))
-
     document.add_page_break()
 
 
 def _render_chapter_three(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第三章 总体情况", level=1)
 
-    _add_heading(document, "3.1 集群运行情况", level=2)
-    cluster_status = str(data.get("cluster", {}).get("cluster_status", "未采集"))
-    if cluster_status == "未采集":
+    _add_heading(document, "3.1. 集群运行情况", level=2)
+    cluster_status = _text(data.get("cluster", {}).get("cluster_status"))
+    if cluster_status == NOT_COLLECTED:
         document.add_paragraph("本次巡检未获取到集群整体状态检查结果，建议后续补充 gs_om -t status 等集群状态采集。")
     else:
-        document.add_paragraph(f"集群整体状态为：{cluster_status}。")
-    _render_section_evidence(document, data, ["集群运行情况", "集群状态"], exact_only=True, empty_message="未获取到该检查项原始输出。")
+        document.add_paragraph(f"集群整体状态：{cluster_status}")
+    _render_section_evidence(
+        document,
+        data,
+        ["集群运行情况", "集群状态", "集群运行"],
+        exact_only=True,
+        empty_message="检查结果未采集。",
+    )
     _add_conclusion(document, _cluster_status_conclusion(data))
 
-    _add_heading(document, "3.2 磁盘空间概况", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["节点", "文件系统", "总容量", "已用", "可用", "使用率(%)", "挂载点"],
-        _disk_rows(data) or [["未采集", "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[0.9, 1.3, 0.8, 0.8, 0.8, 0.8, 1.4],
+        data,
+        "3.2. 磁盘空间概况",
+        ["磁盘空间大小", "DN占用空间大小", "ETCD占用空间大小"],
+        _disk_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["磁盘空间概况", "磁盘空间大小"])
-    _add_conclusion(document, _disk_conclusion(data))
-
     document.add_page_break()
 
 
 def _render_chapter_four(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第四章 高可用检查", level=1)
-    cluster = data.get("cluster", {})
-    database = data.get("database", {})
-    nodes = data.get("nodes", [])
-
-    _add_heading(document, "4.1 集群高可用状态检查", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "client_addr", "sync_state", "pg_xlog_location_diff"],
-        [
-            [
-                index,
-                row.get("client_addr", "未采集"),
-                row.get("sync_state", "未采集"),
-                row.get("pg_xlog_location_diff", "未采集"),
-            ]
-            for index, row in enumerate(cluster.get("ha_status", []), start=1)
-        ] or [[1, "未采集", "未采集", "未采集"]],
-        column_widths=[0.6, 2.0, 1.1, 1.6],
+        data,
+        "4.1. 集群高可用状态检查",
+        ["集群高可用状态检查"],
+        _ha_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["集群高可用状态检查"])
-    _add_conclusion(document, _ha_conclusion(data))
-
-    _add_heading(document, "4.2 CPU 一天使用信息", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["节点", "avg_user", "avg_system", "avg_iowait", "avg_idle", "min_idle", "max_iowait"],
-        [
-            [
-                _node_label(node),
-                node.get("cpu_daily", {}).get("avg_user", 0),
-                node.get("cpu_daily", {}).get("avg_system", 0),
-                node.get("cpu_daily", {}).get("avg_iowait", 0),
-                node.get("cpu_daily", {}).get("avg_idle", 0),
-                node.get("cpu_daily", {}).get("min_idle", 0),
-                node.get("cpu_daily", {}).get("max_iowait", 0),
-            ]
-            for node in nodes
-        ] or [["未采集", 0, 0, 0, 0, 0, 0]],
-        column_widths=[1.0, 0.8, 0.9, 0.9, 0.9, 0.9, 0.9],
+        data,
+        "4.2. CPU 一天使用信息",
+        ["CPU近一天使用情况"],
+        _cpu_daily_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["CPU近一天使用情况"])
-    _add_conclusion(document, _cpu_daily_conclusion(data))
-
-    _add_heading(document, "4.3 数据库运行状态", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "checktime", "uptime", "lsn", "insert_lsn", "write_lsn", "is_in_recovery"],
-        [
-            [
-                index,
-                row.get("checktime", "未采集"),
-                row.get("uptime", "未采集"),
-                row.get("lsn", "未采集"),
-                row.get("insert_lsn", "未采集"),
-                row.get("write_lsn", "未采集"),
-                row.get("is_in_recovery", "未采集"),
-            ]
-            for index, row in enumerate(database.get("running_status", {}).get("records", []), start=1)
-        ] or [[1, "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[0.5, 1.2, 1.0, 1.0, 1.0, 1.0, 0.9],
+        data,
+        "4.3. 数据库运行状态",
+        ["数据库运行状态检查"],
+        _running_status_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["数据库运行状态检查"])
-    _add_conclusion(document, _running_status_conclusion(data))
-
-    _add_heading(document, "4.4 复制槽状态", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "slot_name", "slot_type", "active", "delay_lsn"],
-        [
-            [
-                index,
-                row.get("slot_name", "未采集"),
-                row.get("slot_type", "未采集"),
-                row.get("active", "未采集"),
-                row.get("delay_lsn", "未采集"),
-            ]
-            for index, row in enumerate(cluster.get("replication_slots", []), start=1)
-        ] or [[1, "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[0.6, 2.0, 1.1, 0.8, 1.2],
+        data,
+        "4.4. 复制槽状态",
+        ["复制槽状态检查"],
+        _replication_slot_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["复制槽状态检查"])
-    _add_conclusion(document, _replication_slot_conclusion(data))
-
     document.add_page_break()
 
 
 def _render_chapter_five(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第五章 参数检查", level=1)
-    database = data.get("database", {})
-    cluster = data.get("cluster", {})
-
-    _add_heading(document, "5.1 函数运行状态检查", level=2)
-    _render_section_evidence(document, data, ["函数运行状态检查"])
-    _add_conclusion(document, _function_conclusion(data))
-
-    _add_heading(document, "5.2 数据库信息检查", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "数据库名", "容量", "age", "is_template", "allow_conn", "conn_limit"],
-        [
-            [
-                index,
-                row.get("datname", "未采集"),
-                row.get("readable_size", "未采集"),
-                row.get("age", "未采集"),
-                row.get("is_template", "未采集"),
-                row.get("allow_conn", "未采集"),
-                row.get("conn_limit", "未采集"),
-            ]
-            for index, row in enumerate(database.get("databases", []), start=1)
-        ] or [[1, "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[0.5, 1.4, 1.1, 0.9, 0.9, 0.9, 0.9],
+        data,
+        "5.1. 函数运行状态检查",
+        ["函数运行状态检查"],
+        "函数运行状态检查完成，未发现明显异常。",
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["数据库信息检查"])
-    _add_conclusion(document, _database_info_conclusion(data))
+    _render_check_section(
+        document,
+        data,
+        "5.2. 数据库信息检查",
+        ["数据库信息检查"],
+        _database_info_conclusion(data),
+        exact_only=True,
+    )
 
-    _add_heading(document, "5.3 gs_collector 信息收集", level=2)
-    _render_section_evidence(document, data, ["gs_collector 信息收集", "gs_collector信息"])
-    ng_display_items = cluster.get("gs_check_summary", {}).get("ng_display_items", [])
-    if ng_display_items:
-        document.add_paragraph("参数巡检中发现以下需关注项：")
-        _add_table(
-            document,
-            ["序号", "检查项", "状态", "问题摘要", "整改建议"],
-            [
-                [
-                    index,
-                    item.get("check_name", "未采集"),
-                    item.get("status", "未采集"),
-                    item.get("detail_summary", "未采集"),
-                    item.get("suggestion", "未采集"),
-                ]
-                for index, item in enumerate(ng_display_items, start=1)
-            ],
-            column_widths=[0.5, 1.3, 0.7, 2.0, 2.0],
-        )
-    _add_conclusion(document, _parameter_check_conclusion(data))
-
+    _add_heading(document, "5.3. gs_collector 信息收集", level=2)
+    _render_section_evidence(document, data, ["gs_collector信息", "gs_collector 信息"], exact_only=True)
+    _render_gs_check_summary(document, data)
+    _add_conclusion(document, _gs_check_conclusion(data))
     document.add_page_break()
 
 
 def _render_chapter_six(document: Document, data: dict[str, Any]) -> None:
     _add_heading(document, "第六章 系统管理维护", level=1)
-    database = data.get("database", {})
-
-    _add_heading(document, "6.1 大表检查", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "datname", "nspname", "relname", "relsize", "indexsize"],
-        [
-            [
-                index,
-                row.get("datname", "未采集"),
-                row.get("nspname", "未采集"),
-                row.get("relname", "未采集"),
-                row.get("relsize", "未采集"),
-                row.get("indexsize", "未采集"),
-            ]
-            for index, row in enumerate(database.get("large_tables", []), start=1)
-        ] or [[1, "未采集", "未采集", "未采集", "未采集", "未采集"]],
-        column_widths=[0.5, 1.0, 1.0, 2.0, 1.0, 1.0],
+        data,
+        "6.1. 大表检查",
+        ["大表检查"],
+        _large_table_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["大表检查"])
-    _add_conclusion(document, _large_table_conclusion(data))
-
-    _add_heading(document, "6.2 未使用的索引", level=2)
-    unused_indexes = database.get("unused_indexes", [])
-    if unused_indexes:
-        _add_table(
-            document,
-            ["序号", "schemaname", "relname", "indexrelname", "idx_scan", "size"],
-            [
-                [
-                    index,
-                    row.get("schemaname", "未采集"),
-                    row.get("relname", "未采集"),
-                    row.get("indexrelname", "未采集"),
-                    row.get("idx_scan", "未采集"),
-                    row.get("size", "未采集"),
-                ]
-                for index, row in enumerate(unused_indexes, start=1)
-            ],
-            column_widths=[0.5, 0.9, 1.3, 1.8, 0.8, 1.0],
-        )
-    else:
-        document.add_paragraph(database.get("unused_indexes_summary", "未发现未使用索引"))
-    _render_section_evidence(document, data, ["未使用的索引"])
-    _add_conclusion(document, _unused_index_conclusion(data))
-
-    _add_heading(document, "6.3 索引建议", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "tablename", "table_size", "seq_scan", "idx_scan", "rate"],
-        [
-            [
-                index,
-                row.get("tablename", "未采集"),
-                row.get("table_size", "未采集"),
-                row.get("seq_scan", 0),
-                row.get("idx_scan", 0),
-                row.get("rate", "未采集"),
-            ]
-            for index, row in enumerate(database.get("index_suggestions", []), start=1)
-        ] or [[1, "未采集", "未采集", 0, 0, "未采集"]],
-        column_widths=[0.5, 2.1, 1.0, 0.8, 0.8, 0.8],
+        data,
+        "6.2. 未使用的索引",
+        ["未使用的索引"],
+        _unused_index_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["索引建议"])
-    _add_conclusion(document, _index_suggestion_conclusion(data))
-
-    _add_heading(document, "6.4 表膨胀检查", level=2)
-    _add_table(
+    _render_check_section(
         document,
-        ["序号", "schemaname", "relname", "n_live_tup", "n_dead_tup", "dead_rate"],
-        [
-            [
-                index,
-                row.get("schemaname", "未采集"),
-                row.get("relname", "未采集"),
-                row.get("n_live_tup", 0),
-                row.get("n_dead_tup", 0),
-                row.get("dead_rate", "未采集"),
-            ]
-            for index, row in enumerate(database.get("table_bloat", []), start=1)
-        ] or [[1, "未采集", "未采集", 0, 0, "未采集"]],
-        column_widths=[0.5, 1.0, 1.8, 1.0, 1.0, 0.8],
+        data,
+        "6.3. 索引建议",
+        ["索引建议"],
+        _index_suggestion_conclusion(data),
+        exact_only=True,
     )
-    _render_section_evidence(document, data, ["表膨胀检查"])
-    _add_conclusion(document, _table_bloat_conclusion(data))
+    _render_check_section(
+        document,
+        data,
+        "6.4. 表膨胀检查",
+        ["表膨胀检查"],
+        _table_bloat_conclusion(data),
+        exact_only=True,
+    )
+
+
+def _render_check_section(
+    document: Document,
+    data: dict[str, Any],
+    heading: str,
+    section_names: list[str],
+    conclusion: str,
+    *,
+    exact_only: bool = True,
+) -> None:
+    _add_heading(document, heading, level=2)
+    _render_section_evidence(document, data, section_names, exact_only=exact_only)
+    _add_conclusion(document, conclusion)
 
 
 def _render_section_evidence(
@@ -450,363 +311,332 @@ def _render_section_evidence(
     data: dict[str, Any],
     section_names: list[str],
     *,
-    exact_only: bool = False,
-    empty_message: str = "未获取到该检查项原始输出。",
-) -> None:
-    document.add_paragraph("检查结果：")
-    matches = _matching_section_images(data, section_names, exact_only=exact_only)
-    if not matches:
+    exact_only: bool = True,
+    empty_message: str = "检查结果未采集。",
+) -> int:
+    items = _matching_section_images(data, section_names, exact_only=exact_only)
+    if not items:
         document.add_paragraph(empty_message)
-        return
-    for image_path in matches:
-        document.add_picture(str(image_path), width=IMAGE_WIDTH)
+        return 0
 
-
-def _add_conclusion(document: Document, lines: list[str]) -> None:
-    document.add_paragraph("结论：")
-    for line in lines or ["未采集。"]:
-        document.add_paragraph(line)
+    for item in items:
+        document.add_paragraph("检查结果：")
+        image_path = Path(str(item.get("image_path", "")))
+        try:
+            document.add_picture(str(image_path), width=IMAGE_WIDTH)
+        except Exception:
+            document.add_paragraph("检查结果图片插入失败。")
+    return len(items)
 
 
 def _matching_section_images(
     data: dict[str, Any],
     section_names: list[str],
     *,
-    exact_only: bool = False,
-) -> list[Path]:
-    target_names = _expand_section_names(section_names) if not exact_only else section_names
-    paths: list[Path] = []
-    for item in (data.get("evidence_images") or {}).get("items", []) or []:
+    exact_only: bool = True,
+) -> list[dict[str, Any]]:
+    evidence = data.get("evidence_images", {})
+    items = evidence.get("items", [])
+    matched: list[dict[str, Any]] = []
+    targets = [name.lower().replace(" ", "") for name in section_names]
+    for item in items:
         if item.get("type") != "section_text" or item.get("status") != "success":
             continue
-        section_name = str(item.get("section_name", "")).strip()
-        if exact_only:
-            matched = section_name in target_names
-        else:
-            matched = any(section_name == name or name in section_name for name in target_names)
-        if not matched:
-            continue
         image_path = Path(str(item.get("image_path", "")))
-        if image_path.exists():
-            paths.append(image_path)
-    return paths
-
-
-def _expand_section_names(section_names: list[str]) -> list[str]:
-    expanded: list[str] = []
-    for name in section_names:
-        expanded.append(name)
-        expanded.extend(SECTION_ALIASES.get(name, []))
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for name in expanded:
-        if name in seen:
+        if not image_path.exists():
             continue
-        seen.add(name)
-        deduped.append(name)
-    return deduped
+        section_name = str(item.get("section_name") or "")
+        normalized = section_name.lower().replace(" ", "")
+        if exact_only:
+            ok = normalized in targets
+        else:
+            ok = any(target in normalized or normalized in target for target in targets)
+        if ok:
+            matched.append(item)
+    return matched
 
 
-def _chapter_one_summary_lines(data: dict[str, Any]) -> list[str]:
+def _render_gs_check_summary(document: Document, data: dict[str, Any]) -> None:
+    summary = data.get("cluster", {}).get("gs_check_summary", {})
+    paragraph = document.add_paragraph()
+    paragraph.add_run("gs_check 巡检结果：").bold = True
+    paragraph.add_run(
+        f"OK {summary.get('ok_count', 0)} 项，"
+        f"NG {summary.get('ng_count', 0)} 项，"
+        f"NA {summary.get('na_count', 0)} 项，"
+        f"UNKNOWN {summary.get('unknown_count', 0)} 项。"
+    )
+
+    ng_items = summary.get("ng_display_items") or summary.get("ng_items") or []
+    if not ng_items:
+        return
+
+    for index, item in enumerate(ng_items, start=1):
+        check_name = _text(item.get("check_name"))
+        detail = _short_text(item.get("detail_summary"), 120)
+        suggestion = _text(item.get("suggestion"), _gs_check_suggestion(check_name))
+        document.add_paragraph(f"{index}. {check_name}：状态 NG；{detail}；{suggestion}")
+
+
+def _add_heading(document: Document, text: str, *, level: int) -> None:
+    paragraph = document.add_heading(text, level=level)
+    for run in paragraph.runs:
+        run.bold = True
+        run.font.name = "Microsoft YaHei"
+        run.font.size = Pt(16 if level == 1 else 13)
+
+
+def _add_conclusion(document: Document, text: str) -> None:
+    paragraph = document.add_paragraph()
+    paragraph.add_run("结论：").bold = True
+    paragraph.add_run(_text(text))
+
+
+def _summary_lines(data: dict[str, Any]) -> list[str]:
     cluster = data.get("cluster", {})
-    logs = data.get("logs", {})
     database = data.get("database", {})
-    max_disk = cluster.get("resource_summary", {}).get("cluster_max_disk_use_percent", "未采集")
-    memory_status = _memory_status_text(data)
-    standby_status = _ha_summary_text(data)
     return [
-        f"数据库整体状态：根据本次巡检结果，数据库整体状态为 {cluster.get('overall_status', '未采集')}。",
-        f"日志：{_log_sentence(logs)}",
-        f"实例状态：{_instance_status_text(data)}",
-        f"磁盘：当前全集群最高磁盘使用率为 {max_disk}%，磁盘空间使用 {_disk_health_text(data)}。",
-        f"standby / 高可用：{standby_status}",
-        f"内存：{memory_status}",
-        "数据库信息：数据库列表、容量、年龄等信息已完成检查。",
-        f"巡检发现：{_finding_overview(data)}",
+        f"数据库整体状态{_overall_status_phrase(cluster.get('overall_status'))}。",
+        f"日志：{_log_sentence(data)}",
+        f"实例状态：{_running_status_conclusion(data)}",
+        f"磁盘：{_disk_conclusion(data)}",
+        f"standby：{_ha_conclusion(data)}",
+        f"内存：{_memory_conclusion(data)}",
+        f"数据库信息：{_database_info_conclusion(data)}",
+        f"巡检发现：{_major_findings_sentence(data, database)}",
     ]
 
 
-def _major_findings(data: dict[str, Any]) -> list[str]:
-    findings: list[str] = []
-    gs_ng = data.get("cluster", {}).get("gs_check_summary", {}).get("ng_count", 0)
-    if gs_ng:
-        findings.append(f"gs_check 存在 {gs_ng} 个 NG 项。")
-    if data.get("database", {}).get("table_bloat"):
-        findings.append("部分表存在膨胀，建议结合维护窗口执行后续处理。")
-    if data.get("database", {}).get("index_suggestions"):
-        findings.append("存在索引优化建议，建议结合业务访问路径进一步评估。")
-    if str(data.get("cluster", {}).get("cluster_status", "未采集")) == "未采集":
-        findings.append("未采集到集群总体状态，建议后续补充集群状态采集。")
-    return findings
-
-
-def _finding_overview(data: dict[str, Any]) -> str:
-    findings = _major_findings(data)
-    if not findings:
-        return "未发现需重点说明的风险项。"
-    return "；".join(finding.rstrip("。") for finding in findings) + "。"
-
-
-def _os_conclusion(data: dict[str, Any]) -> list[str]:
-    node_count = len(data.get("nodes", []))
-    return [f"本次共完成 {node_count} 个节点的操作系统版本检查，操作系统版本信息已完成采集。"]
-
-
-def _database_version_conclusion(data: dict[str, Any]) -> list[str]:
-    version = data.get("database", {}).get("version", "未采集")
-    if version == "未采集":
-        return ["本次巡检未获取到数据库版本检查结果，建议后续补充采集。"]
-    return [f"本次巡检获取到的数据库版本为 {version}。"]
-
-
-def _cpu_conclusion(data: dict[str, Any]) -> list[str]:
-    nodes = data.get("nodes", [])
-    if not nodes:
-        return ["本次巡检未采集到 CPU 核数信息。"]
-    return ["各节点 CPU 型号及核数信息已完成检查，未见异常配置项。"]
-
-
-def _cluster_status_conclusion(data: dict[str, Any]) -> list[str]:
-    cluster_status = str(data.get("cluster", {}).get("cluster_status", "未采集"))
-    if cluster_status == "未采集":
-        return ["建议后续补充集群整体状态采集，以便完整评估集群服务状态。"]
-    return [f"当前集群整体状态为 {cluster_status}。"]
-
-
-def _disk_conclusion(data: dict[str, Any]) -> list[str]:
-    max_disk = _to_float(data.get("cluster", {}).get("resource_summary", {}).get("cluster_max_disk_use_percent"))
-    if max_disk is None:
-        return ["本次巡检未采集到完整磁盘空间检查结果。"]
-    return [f"当前全集群最高磁盘使用率为 {int(max_disk) if max_disk.is_integer() else max_disk}%，磁盘空间整体状态为{_disk_health_text(data)}。"]
-
-
-def _ha_conclusion(data: dict[str, Any]) -> list[str]:
-    lines = [data.get("cluster", {}).get("ha_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"高可用同步"}))
-    return lines
-
-
-def _cpu_daily_conclusion(data: dict[str, Any]) -> list[str]:
-    min_idle = data.get("cluster", {}).get("resource_summary", {}).get("cluster_min_cpu_idle", "未采集")
-    max_iowait = data.get("cluster", {}).get("resource_summary", {}).get("cluster_max_iowait", "未采集")
-    lines = [f"巡检周期内 CPU 最低 idle 为 {min_idle}%，最大 iowait 为 {max_iowait}%。"]
-    lines.extend(_section_risk_lines(data, {"CPU 使用率", "IO 等待"}))
-    return lines
-
-
-def _running_status_conclusion(data: dict[str, Any]) -> list[str]:
-    summary = data.get("database", {}).get("running_status", {}).get("summary", "未采集")
-    return [summary]
-
-
-def _replication_slot_conclusion(data: dict[str, Any]) -> list[str]:
-    lines = [data.get("cluster", {}).get("replication_slot_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"复制槽状态", "复制槽延迟"}))
-    return lines
-
-
-def _function_conclusion(data: dict[str, Any]) -> list[str]:
-    return ["函数运行状态检查结果已完成采集，未发现需单独说明的异常。"]
-
-
-def _database_info_conclusion(data: dict[str, Any]) -> list[str]:
-    database_count = len(data.get("database", {}).get("databases", []))
-    return [f"本次共完成 {database_count} 个数据库对象的信息检查。"]
-
-
-def _parameter_check_conclusion(data: dict[str, Any]) -> list[str]:
-    gs_check = data.get("cluster", {}).get("gs_check_summary", {})
-    log_sentence = _log_sentence(data.get("logs", {}))
-    lines = [
-        f"gs_check 巡检结果中，OK {gs_check.get('ok_count', 0)} 项，NG {gs_check.get('ng_count', 0)} 项，NA {gs_check.get('na_count', 0)} 项。",
-        log_sentence,
-    ]
-    if not gs_check.get("ng_display_items"):
-        lines.append("本章节未发现需单独说明的参数配置异常项。")
-    return lines
-
-
-def _large_table_conclusion(data: dict[str, Any]) -> list[str]:
-    lines = [data.get("database", {}).get("large_tables_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"大表容量"}))
-    return lines
-
-
-def _unused_index_conclusion(data: dict[str, Any]) -> list[str]:
-    database = data.get("database", {})
-    lines = [database.get("unused_indexes_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"未使用索引"}))
-    return lines
-
-
-def _index_suggestion_conclusion(data: dict[str, Any]) -> list[str]:
-    lines = [data.get("database", {}).get("index_suggestions_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"索引优化"}))
-    return lines
-
-
-def _table_bloat_conclusion(data: dict[str, Any]) -> list[str]:
-    lines = [data.get("database", {}).get("table_bloat_summary", "未采集")]
-    lines.extend(_section_risk_lines(data, {"表膨胀"}))
-    return lines
-
-
-def _section_risk_lines(data: dict[str, Any], target_items: set[str]) -> list[str]:
-    lines: list[str] = []
-    for risk in data.get("risks", []):
-        if risk.get("item") not in target_items:
-            continue
-        lines.append(f"{risk.get('detail', '未采集')} 建议：{risk.get('suggestion', '未采集')}")
-    return lines
-
-
-def _instance_status_text(data: dict[str, Any]) -> str:
-    records = data.get("database", {}).get("running_status", {}).get("records", [])
-    if not records:
-        return "本次未获取到数据库运行状态检查结果。"
-    return "数据库运行状态检查正常。"
-
-
-def _disk_health_text(data: dict[str, Any]) -> str:
-    max_disk = _to_float(data.get("cluster", {}).get("resource_summary", {}).get("cluster_max_disk_use_percent"))
-    if max_disk is None:
-        return "未采集"
-    if max_disk < 70:
+def _overall_status_phrase(status: Any) -> str:
+    status_text = _text(status, "良好")
+    if status_text == "良好":
         return "良好"
-    if max_disk < 80:
-        return "关注"
-    return "风险"
+    if status_text == "风险":
+        return "存在风险项"
+    if status_text == "关注":
+        return "存在需关注项"
+    return f"为{status_text}"
 
 
-def _memory_status_text(data: dict[str, Any]) -> str:
-    usage_values = [
-        _to_float((node.get("memory") or {}).get("usage_percent"))
-        for node in data.get("nodes", [])
-    ]
-    usage_values = [value for value in usage_values if value is not None]
-    if not usage_values:
-        return "本次未采集到完整内存使用率信息。"
-    max_usage = max(usage_values)
-    if max_usage < 80:
-        return f"当前内存使用率整体良好，最高为 {max_usage}%。"
-    if max_usage < 90:
-        return f"当前内存使用率整体需关注，最高为 {max_usage}%。"
-    return f"当前内存使用率存在风险，最高为 {max_usage}%。"
+def _log_sentence(data: dict[str, Any]) -> str:
+    logs = data.get("logs", {})
+    fatal = _text(logs.get("fatal_log_summary"))
+    panic = _text(logs.get("panic_log_summary"))
+    combined = f"{fatal}；{panic}"
+    if "未发现" in combined and "异常日志" in combined:
+        return "没有严重的异常和告警。"
+    if "未发现日志文件" in combined:
+        return "未获取到对应日志文件。"
+    if fatal == NOT_COLLECTED and panic == NOT_COLLECTED:
+        return "未获取到对应日志文件。"
+    return f"发现需关注日志信息，建议结合数据库运行时段核查。{_short_text(combined, 120)}"
 
 
-def _ha_summary_text(data: dict[str, Any]) -> str:
-    records = data.get("cluster", {}).get("ha_status", [])
-    if not records:
-        return "本次未获取到高可用状态检查结果。"
-    diffs = [_to_float(record.get("pg_xlog_location_diff")) for record in records]
-    diffs = [value for value in diffs if value is not None]
-    if diffs and max(diffs) > 0:
-        return f"主备同步存在位点差异，最大差异为 {max(diffs)}。"
-    return "主备同步状态正常，未见位点差异。"
+def _running_status_conclusion(data: dict[str, Any]) -> str:
+    records = data.get("database", {}).get("running_status", {}).get("records", [])
+    if records:
+        unknown_count = sum(1 for row in records if _text(row.get("is_in_recovery")) == NOT_COLLECTED)
+        if unknown_count:
+            return "数据库运行状态检查完成，部分实例角色信息未采集，建议补充核查。"
+        return "数据库运行状态检查完成，各实例状态无明显异常。"
+    return "数据库运行状态检查结果未采集。"
 
 
-def _log_sentence(logs: dict[str, Any]) -> str:
-    fatal = _single_log_sentence("fatal", str(logs.get("fatal_log_summary", "未采集")))
-    panic = _single_log_sentence("panic", str(logs.get("panic_log_summary", "未采集")))
-    return f"{fatal}{panic}"
+def _disk_conclusion(data: dict[str, Any]) -> str:
+    max_percent = _max_disk_use(data)
+    if max_percent is None:
+        return "未获取到磁盘空间使用率，建议补充采集。"
+    if max_percent < 70:
+        return f"当前全集群最高磁盘使用率为 {max_percent:g}%，磁盘空间充足，整体状态为良好。"
+    if max_percent < 80:
+        return f"当前全集群最高磁盘使用率为 {max_percent:g}%，建议持续关注磁盘增长趋势。"
+    return f"当前全集群最高磁盘使用率为 {max_percent:g}%，建议清理历史文件或评估扩容。"
 
 
-def _single_log_sentence(label: str, summary: str) -> str:
-    normalized = summary.strip()
-    if normalized == "未发现日志文件":
-        return f"未获取到 {label} 日志文件。"
-    if "未发现" in normalized and "异常日志" in normalized:
-        return f"未发现 {label} 异常日志。"
-    if not normalized or normalized == "未采集":
-        return f"{label} 日志检查结果未采集。"
-    return f"发现 {label} 日志异常摘要，建议进一步核查。"
+def _ha_conclusion(data: dict[str, Any]) -> str:
+    rows = data.get("cluster", {}).get("ha_status", [])
+    if not rows:
+        return "高可用同步状态检查结果未采集。"
+    delayed = [row for row in rows if _number(row.get("pg_xlog_location_diff")) > 0]
+    if delayed:
+        return "主备同步存在位点差异，建议结合业务写入压力持续关注。"
+    return "各备节点与 Master 主节点同步状态正常。"
 
 
-def _disk_rows(data: dict[str, Any]) -> list[list[Any]]:
-    rows: list[list[Any]] = []
+def _memory_conclusion(data: dict[str, Any]) -> str:
+    values = []
+    for node in data.get("nodes", []):
+        value = _number(node.get("memory", {}).get("usage_percent"))
+        if value > 0:
+            values.append(value)
+    if not values:
+        return "内存使用率未采集。"
+    max_value = max(values)
+    if max_value < 80:
+        return f"检查节点最高内存使用率为 {max_value:g}%，内存使用情况良好。"
+    if max_value < 90:
+        return f"检查节点最高内存使用率为 {max_value:g}%，建议持续观察内存使用趋势。"
+    return f"检查节点最高内存使用率为 {max_value:g}%，建议排查内存占用较高的会话或进程。"
+
+
+def _database_info_conclusion(data: dict[str, Any]) -> str:
+    databases = data.get("database", {}).get("databases", [])
+    if databases:
+        return "数据库信息检查完成，数据库列表、容量和年龄等信息已完成核查。"
+    return "数据库信息检查结果未采集。"
+
+
+def _os_conclusion(data: dict[str, Any]) -> str:
+    return "操作系统版本信息检查完成。" if data.get("nodes") else "操作系统版本信息未采集。"
+
+
+def _database_version_conclusion(data: dict[str, Any]) -> str:
+    version = _text(data.get("database", {}).get("version"))
+    if version == NOT_COLLECTED:
+        return "数据库版本检查结果未采集。"
+    return "数据库版本信息检查完成。"
+
+
+def _cpu_conclusion(data: dict[str, Any]) -> str:
+    cores = [node.get("cpu_cores") for node in data.get("nodes", []) if node.get("cpu_cores") not in (None, "", NOT_COLLECTED)]
+    return "CPU 核数信息检查完成。" if cores else "CPU 核数信息未采集。"
+
+
+def _cpu_daily_conclusion(data: dict[str, Any]) -> str:
+    cpu_rows = [node.get("cpu_daily", {}) for node in data.get("nodes", [])]
+    if not cpu_rows:
+        return "CPU 一天使用信息未采集。"
+    min_idle = min((_number(row.get("avg_idle")) for row in cpu_rows if _number(row.get("avg_idle")) > 0), default=0)
+    max_iowait = max((_number(row.get("max_iowait")) for row in cpu_rows), default=0)
+    if min_idle and min_idle < 30:
+        return "CPU 空闲率偏低，建议排查高 CPU SQL、后台任务和系统负载。"
+    if max_iowait > 10:
+        return "IO 等待偏高，建议关注存储响应时间和数据库写入压力。"
+    return "CPU 使用率整体平稳，未发现明显 CPU 资源瓶颈。"
+
+
+def _replication_slot_conclusion(data: dict[str, Any]) -> str:
+    slots = data.get("cluster", {}).get("replication_slots", [])
+    if not slots:
+        return "复制槽状态检查结果未采集。"
+    inactive = [slot for slot in slots if str(slot.get("active", "")).lower() in {"false", "0", "f", "no"}]
+    delayed = [slot for slot in slots if _number(slot.get("delay_lsn")) > 0]
+    if inactive or delayed:
+        return "复制槽检查发现需关注项，建议核查复制槽活跃状态和延迟情况。"
+    return "复制槽状态正常。"
+
+
+def _cluster_status_conclusion(data: dict[str, Any]) -> str:
+    status = _text(data.get("cluster", {}).get("cluster_status"))
+    if status == NOT_COLLECTED:
+        return "本次巡检未获取到集群整体状态检查结果，建议后续补充 gs_om -t status 等集群状态采集。"
+    if status.lower() == "normal":
+        return "集群整体运行状态正常。"
+    return "集群整体状态存在需关注项，建议进一步核查。"
+
+
+def _gs_check_conclusion(data: dict[str, Any]) -> str:
+    summary = data.get("cluster", {}).get("gs_check_summary", {})
+    ng_count = int(_number(summary.get("ng_count")))
+    if ng_count:
+        return f"gs_check 巡检存在 {ng_count} 项 NG，建议根据检查结果进行核查和整改。"
+    if summary:
+        return "gs_check 巡检未发现 NG 项。"
+    return "gs_check 巡检信息未采集。"
+
+
+def _large_table_conclusion(data: dict[str, Any]) -> str:
+    count = len(data.get("database", {}).get("large_tables", []))
+    if count:
+        return f"大表检查发现 {count} 条记录，建议结合业务增长趋势评估归档、分区或历史数据清理策略。"
+    return "大表检查未发现需关注记录。"
+
+
+def _unused_index_conclusion(data: dict[str, Any]) -> str:
+    count = len(data.get("database", {}).get("unused_indexes", []))
+    if count:
+        return f"未使用索引检查发现 {count} 条记录，建议确认后再考虑清理，避免误删业务依赖索引。"
+    return "未发现未使用索引。"
+
+
+def _index_suggestion_conclusion(data: dict[str, Any]) -> str:
+    count = len(data.get("database", {}).get("index_suggestions", []))
+    if count:
+        return f"存在 {count} 条索引优化建议，建议结合高频 SQL、慢 SQL 和业务访问路径评估。"
+    return "索引建议检查未发现需关注记录。"
+
+
+def _table_bloat_conclusion(data: dict[str, Any]) -> str:
+    count = len(data.get("database", {}).get("table_bloat", []))
+    if count:
+        return f"表膨胀检查发现 {count} 条记录，建议结合维护窗口执行 VACUUM / ANALYZE 或表维护操作。"
+    return "表膨胀检查未发现需关注记录。"
+
+
+def _major_findings_sentence(data: dict[str, Any], database: dict[str, Any]) -> str:
+    findings: list[str] = []
+    if int(_number(data.get("cluster", {}).get("gs_check_summary", {}).get("ng_count"))) > 0:
+        findings.append("gs_check 存在 NG 项")
+    if database.get("table_bloat"):
+        findings.append("部分表存在膨胀")
+    if database.get("index_suggestions"):
+        findings.append("存在索引优化建议")
+    if _text(data.get("cluster", {}).get("cluster_status")) == NOT_COLLECTED:
+        findings.append("集群总体状态需补充采集")
+    return "；".join(findings) + "。" if findings else "本次巡检未发现明显风险项。"
+
+
+def _max_disk_use(data: dict[str, Any]) -> float | None:
+    values = []
+    summary_value = _number(data.get("cluster", {}).get("resource_summary", {}).get("cluster_max_disk_use_percent"))
+    if summary_value > 0:
+        values.append(summary_value)
     for node in data.get("nodes", []):
         for disk in node.get("disks", []):
-            rows.append(
-                [
-                    _node_label(node),
-                    disk.get("filesystem", "未采集"),
-                    disk.get("size", "未采集"),
-                    disk.get("used", "未采集"),
-                    disk.get("avail", "未采集"),
-                    disk.get("use_percent", "未采集"),
-                    disk.get("mounted_on", "未采集"),
-                ]
-            )
-    return rows
+            value = _number(disk.get("use_percent"))
+            if value > 0:
+                values.append(value)
+    return max(values) if values else None
 
 
-def _resolve_inspection_date(report: dict[str, Any]) -> str:
-    explicit = str(report.get("inspection_date", "") or "").strip()
-    if explicit and explicit != "未采集":
-        return explicit
-    candidates = [str(report.get("source_package", "") or "")]
-    candidates.extend(str(item) for item in report.get("source_files", []) or [])
-    for text in candidates:
-        match = re.search(r"(20\d{2})(\d{2})(\d{2})(?:\d{6})?", text)
-        if match:
-            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-    return "未采集"
+def _gs_check_suggestion(check_name: Any) -> str:
+    name = str(check_name or "")
+    if "CheckDirPermissions" in name:
+        return "建议根据安全规范核查目录权限，避免权限过宽。"
+    if "CheckGUCValue" in name:
+        return "建议核查数据库参数值是否符合当前集群规模和运维规范。"
+    if "CheckSysadminUser" in name:
+        return "建议核查 sysadmin 用户是否符合最小权限和安全管理要求。"
+    if "CheckHashIndex" in name:
+        return "建议评估 hash index 使用情况、兼容性和维护风险。"
+    return "建议结合 gs_check 检查结果进行核查和整改。"
 
 
-def _node_label(node: dict[str, Any]) -> str:
-    ip = str(node.get("ip", "")).strip()
-    if ip and ip != "未采集":
-        return ip
-    hostname = str(node.get("hostname", "")).strip()
-    if hostname and hostname != "未采集":
-        return hostname
-    return "未采集"
+def _inspection_date(data: dict[str, Any]) -> str:
+    value = _text(data.get("report", {}).get("inspection_date"))
+    if value != NOT_COLLECTED:
+        return value
+    return NOT_COLLECTED
 
 
-def _add_heading(document: Document, text: str, level: int) -> None:
-    heading = document.add_heading(level=level)
-    run = heading.add_run(text)
-    run.bold = True
+def _short_text(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
-def _add_table(
-    document: Document,
-    headers: list[str],
-    rows: list[list[Any]],
-    column_widths: list[float] | None = None,
-) -> None:
-    table = document.add_table(rows=1, cols=len(headers))
-    table.style = "Table Grid"
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.autofit = False
-
-    for column_index, header in enumerate(headers):
-        cell = table.rows[0].cells[column_index]
-        paragraph = cell.paragraphs[0]
-        run = paragraph.add_run(str(header))
-        run.bold = True
-        if column_widths and column_index < len(column_widths):
-            cell.width = Inches(column_widths[column_index])
-
-    for row in rows:
-        cells = table.add_row().cells
-        for column_index, value in enumerate(row):
-            cells[column_index].text = "" if value is None else str(value)
-            if column_widths and column_index < len(column_widths):
-                cells[column_index].width = Inches(column_widths[column_index])
+def _text(value: Any, default: str = NOT_COLLECTED) -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
 
 
-def _to_float(value: Any) -> float | None:
-    if value in (None, "", "未采集"):
-        return None
+def _number(value: Any) -> float:
     try:
-        return float(str(value).strip().rstrip("%"))
-    except ValueError:
-        return None
-
-
-def _sanitize_text(text: str) -> str:
-    cleaned = text
-    for banned in BANNED_WORDS:
-        cleaned = cleaned.replace(banned, "")
-    return cleaned
+        if value is None or value == "":
+            return 0.0
+        return float(str(value).strip().replace("%", ""))
+    except (TypeError, ValueError):
+        return 0.0

@@ -53,7 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     if not input_path.exists():
         parser.error(f"input file does not exist: {input_path}")
     if not template_path.exists():
-        parser.error(f"template file does not exist: {template_path}")
+        fallback_template = Path("templates") / template_path.name
+        if fallback_template.exists():
+            print(f"[GaussDB Report] Template path not found, using matching template: {fallback_template}")
+            template_path = fallback_template
+        else:
+            print(f"[GaussDB Report] Warning: template file does not exist, using built-in report layout: {template_path}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prepare_workdir(workdir)
