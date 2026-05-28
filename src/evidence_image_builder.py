@@ -186,7 +186,8 @@ def _paginate_section_text(
     font: ImageFont.ImageFont,
     header_font: ImageFont.ImageFont,
 ) -> list[list[str]]:
-    header_lines = [f"章节名称: {section_name}", f"来源文件: {source_file}", ""]
+    _ = source_file
+    header_lines = [f"章节名称: {section_name}", "检查输出:", ""]
     wrapped_lines: list[str] = []
     for line in content.splitlines() or [""]:
         wrapped_lines.extend(_wrap_line(line, font, PAGE_WIDTH - MARGIN_X * 2))
@@ -206,7 +207,7 @@ def _paginate_section_text(
         pages.append(all_lines[cursor : cursor + capacity])
         cursor += capacity
         first_page = False
-    return pages or [[f"章节名称: {section_name}", f"来源文件: {source_file}", "", "该章节未采集到原始输出"]]
+    return pages or [[f"章节名称: {section_name}", "检查输出:", "", "该章节未采集到原始输出"]]
 
 
 def _render_text_page(
