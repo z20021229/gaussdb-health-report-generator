@@ -103,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"[GaussDB Report] Generated YAML: {yaml_path}")
 
-    render_docx(data=data, output_path=output_path)
-    print(f"[GaussDB Report] Generated DOCX: {output_path}")
+    rendered_path = render_docx(data=data, output_path=output_path)
+    print(f"[GaussDB Report] Generated DOCX: {rendered_path}")
     print("[GaussDB Report] Pipeline completed.")
 
     return 0

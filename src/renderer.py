@@ -23,6 +23,13 @@ CHAPTER_TITLES = [
 ]
 
 DEFAULT_IMAGE_WIDTH = Inches(6)
+SECTION_IMAGE_ALIASES = {
+    "数据库版本检查": ["数据库版本检查", "数据库版本", "数据库信息检查", "数据库运行状态检查"],
+    "集群运行情况": ["集群运行情况", "集群状态", "集群运行", "集群高可用状态检查"],
+    "CPU核数信息": ["CPU核数信息", "CPU型号信息"],
+    "磁盘空间大小": ["磁盘空间大小", "DN占用空间大小", "ETCD占用空间大小"],
+    "gs_collector信息": ["gs_collector信息", "gs collector"],
+}
 
 
 def render_docx(data: dict[str, Any], output_path: Path) -> Path:
@@ -41,8 +48,13 @@ def render_docx(data: dict[str, Any], output_path: Path) -> Path:
     _render_maintenance_checks(document, data)
     _render_appendix(document, data)
 
-    document.save(output_path)
-    return output_path
+    try:
+        document.save(output_path)
+        return output_path
+    except PermissionError:
+        fallback_path = output_path.with_name(f"{output_path.stem}_latest{output_path.suffix}")
+        document.save(fallback_path)
+        return fallback_path
 
 
 def _configure_document(document: Document) -> None:
@@ -181,7 +193,27 @@ def _render_system_overview(document: Document, data: dict[str, Any]) -> None:
     document.add_paragraph(f"数据库版本：{database.get('version', '未采集')}")
     _insert_section_images(document, data, ["数据库版本检查", "数据库信息检查"])
 
-    _add_heading(document, "2.3 CPU 核数信息", level=2)
+    _add_heading(document, "2.3 CPU 型号信息", level=2)
+    cpu_model_rows = [
+        [
+            _node_label(node),
+            node.get("architecture", "未采集"),
+            node.get("cpu_model", "未采集"),
+            node.get("bogo_mips", "未采集"),
+            node.get("cpu_implementer", "未采集"),
+            node.get("cpu_architecture", "未采集"),
+        ]
+        for node in nodes
+    ]
+    _add_table(
+        document,
+        ["节点", "Architecture", "CPU Model", "BogoMIPS", "CPU Implementer", "CPU Architecture"],
+        cpu_model_rows or [["未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.8, 0.8, 1.7, 0.7, 0.9, 0.9],
+    )
+    _insert_section_images(document, data, ["CPU型号信息"])
+
+    _add_heading(document, "2.4 CPU 核数信息", level=2)
     cpu_rows = [
         [
             _node_label(node),
@@ -198,10 +230,11 @@ def _render_system_overview(document: Document, data: dict[str, Any]) -> None:
         document,
         ["节点", "CPU 型号", "CPU 核数", "每核线程数", "每 Socket 核数", "Socket 数", "NUMA 节点数"],
         cpu_rows or [["未采集", "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.7, 1.5, 0.7, 0.8, 0.8, 0.6, 0.8],
     )
     _insert_section_images(document, data, ["CPU核数信息"])
 
-    _add_heading(document, "2.4 内存信息", level=2)
+    _add_heading(document, "2.5 内存信息", level=2)
     memory_rows = [
         [
             _node_label(node),
@@ -217,6 +250,7 @@ def _render_system_overview(document: Document, data: dict[str, Any]) -> None:
         document,
         ["节点", "总内存(MB)", "已用(MB)", "空闲(MB)", "可用(MB)", "使用率(%)"],
         memory_rows or [["未采集", 0, 0, 0, 0, 0]],
+        column_widths=[1.0, 1.0, 1.0, 1.0, 1.0, 0.8],
     )
     _insert_section_images(document, data, ["内存大小信息"])
     document.add_page_break()
@@ -232,6 +266,7 @@ def _render_overall_status(document: Document, data: dict[str, Any]) -> None:
         document,
         ["巡检项", "巡检结果", "情况描述"],
         _overall_status_rows(data),
+        column_widths=[1.0, 0.8, 4.6],
     )
 
     _add_heading(document, "3.2 集群运行情况", level=2)
@@ -258,6 +293,7 @@ def _render_overall_status(document: Document, data: dict[str, Any]) -> None:
         document,
         ["节点", "文件系统", "总容量", "已用", "可用", "使用率(%)", "挂载点"],
         disk_rows or [["未采集", "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.7, 1.3, 0.7, 0.7, 0.7, 0.7, 1.4],
     )
     _insert_section_images(document, data, ["磁盘空间大小"])
     document.add_page_break()
@@ -283,6 +319,7 @@ def _render_ha_checks(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "client_addr", "sync_state", "pg_xlog_location_diff"],
         ha_rows or [[1, "未采集", "未采集", "未采集"]],
+        column_widths=[0.6, 2.0, 1.2, 1.6],
     )
     _insert_section_images(document, data, ["集群高可用状态检查"])
 
@@ -303,6 +340,7 @@ def _render_ha_checks(document: Document, data: dict[str, Any]) -> None:
         document,
         ["节点", "avg_user", "avg_system", "avg_iowait", "avg_idle", "min_idle", "max_iowait"],
         cpu_daily_rows or [["未采集", 0, 0, 0, 0, 0, 0]],
+        column_widths=[1.0, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
     )
     _insert_section_images(document, data, ["CPU近一天使用情况"])
 
@@ -335,6 +373,7 @@ def _render_ha_checks(document: Document, data: dict[str, Any]) -> None:
             "role_hint",
         ],
         running_rows or [[1, "未采集", "未采集", "未采集", "未采集", "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.4, 0.9, 0.7, 0.7, 0.7, 0.7, 0.9, 0.6, 0.6],
     )
     _insert_section_images(document, data, ["数据库运行状态检查"])
 
@@ -353,6 +392,7 @@ def _render_ha_checks(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "slot_name", "slot_type", "active", "delay_lsn"],
         slot_rows or [[1, "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.6, 2.0, 1.2, 0.8, 1.2],
     )
     _insert_section_images(document, data, ["复制槽状态检查"])
     document.add_page_break()
@@ -393,6 +433,7 @@ def _render_parameter_checks(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "检查项", "状态", "问题摘要", "原始依据路径"],
         ng_rows or [[1, "未采集", "未采集", "未采集", ""]],
+        column_widths=[0.6, 1.6, 0.8, 2.2, 1.8],
     )
     _insert_section_images(document, data, ["gs_check巡检信息"])
 
@@ -414,6 +455,7 @@ def _render_parameter_checks(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "数据库名", "容量(bytes)", "可读容量", "age", "is_template", "allow_conn", "conn_limit"],
         database_rows or [[1, "未采集", 0, "未采集", "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.4, 1.1, 1.0, 0.8, 0.7, 0.7, 0.7, 0.7],
     )
     _insert_section_images(document, data, ["数据库信息检查"])
 
@@ -426,6 +468,10 @@ def _render_parameter_checks(document: Document, data: dict[str, Any]) -> None:
     document.add_paragraph(
         f"panic 日志文件：{', '.join(logs.get('panic_log_files', [])) or '未采集'}"
     )
+
+    _add_heading(document, "5.5 gs_collector 信息", level=2)
+    document.add_paragraph("gs_collector 原始采集结果如下：")
+    _insert_section_images(document, data, ["gs_collector信息"])
     document.add_page_break()
 
 
@@ -450,6 +496,7 @@ def _render_maintenance_checks(document: Document, data: dict[str, Any]) -> None
         document,
         ["序号", "datname", "nspname", "relname", "bytes", "relsize", "indexsize"],
         large_table_rows or [[1, "未采集", "未采集", "未采集", 0, "未采集", "未采集"]],
+        column_widths=[0.4, 0.8, 0.8, 1.5, 0.8, 0.8, 0.8],
     )
     _insert_section_images(document, data, ["大表检查"])
 
@@ -471,6 +518,7 @@ def _render_maintenance_checks(document: Document, data: dict[str, Any]) -> None
             document,
             ["序号", "schemaname", "relname", "indexrelname", "idx_scan", "size"],
             unused_rows,
+            column_widths=[0.4, 0.8, 1.0, 1.6, 0.7, 0.9],
         )
     else:
         document.add_paragraph(database.get("unused_indexes_summary", "未采集"))
@@ -492,6 +540,7 @@ def _render_maintenance_checks(document: Document, data: dict[str, Any]) -> None
         document,
         ["序号", "tablename", "table_size", "seq_scan", "idx_scan", "rate"],
         suggestion_rows or [[1, "未采集", "未采集", 0, 0, "未采集"]],
+        column_widths=[0.4, 2.0, 0.8, 0.7, 0.7, 0.7],
     )
     _insert_section_images(document, data, ["索引建议"])
 
@@ -511,6 +560,7 @@ def _render_maintenance_checks(document: Document, data: dict[str, Any]) -> None
         document,
         ["序号", "schemaname", "relname", "n_live_tup", "n_dead_tup", "dead_rate"],
         bloat_rows or [[1, "未采集", "未采集", 0, 0, "未采集"]],
+        column_widths=[0.4, 0.8, 1.5, 0.8, 0.8, 0.7],
     )
     _insert_section_images(document, data, ["表膨胀检查"])
     document.add_page_break()
@@ -558,6 +608,7 @@ def _render_appendix(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "来源文件", "类型", "状态", "错误信息"],
         html_rows or [[1, "未采集", "html_screenshot", "未采集", "未找到 HTML/WDR 截图记录"]],
+        column_widths=[0.4, 2.4, 0.8, 0.7, 1.4],
     )
 
     _add_heading(document, "截图失败项", level=2)
@@ -576,6 +627,7 @@ def _render_appendix(document: Document, data: dict[str, Any]) -> None:
         document,
         ["序号", "来源文件", "类型", "状态", "错误信息"],
         failed_rows or [[1, "未采集", "未采集", "success", "无失败项"]],
+        column_widths=[0.4, 2.4, 0.8, 0.7, 1.4],
     )
 
 
@@ -585,21 +637,31 @@ def _add_heading(document: Document, text: str, level: int) -> None:
     run.bold = True
 
 
-def _add_table(document: Document, headers: list[str], rows: list[list[Any]]) -> None:
+def _add_table(
+    document: Document,
+    headers: list[str],
+    rows: list[list[Any]],
+    column_widths: list[float] | None = None,
+) -> None:
     table = document.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
 
     for index, header in enumerate(headers):
         cell = table.rows[0].cells[index]
         para = cell.paragraphs[0]
         run = para.add_run(str(header))
         run.bold = True
+        if column_widths and index < len(column_widths):
+            cell.width = Inches(column_widths[index])
 
     for row in rows:
         cells = table.add_row().cells
         for index, value in enumerate(row):
             cells[index].text = "" if value is None else str(value)
+            if column_widths and index < len(column_widths):
+                cells[index].width = Inches(column_widths[index])
 
 
 def _add_key_value_table(document: Document, rows: list[tuple[str, Any]]) -> None:
@@ -621,6 +683,7 @@ def _add_risk_table(document: Document, risks: list[dict[str, Any]]) -> None:
         document,
         ["序号", "检查项", "问题描述", "整改建议", "来源依据"],
         rows or [[1, "未采集", "未采集", "未采集", "未采集"]],
+        column_widths=[0.4, 0.9, 2.1, 1.7, 1.2],
     )
 
 
@@ -643,15 +706,31 @@ def _insert_section_images(document: Document, data: dict[str, Any], section_nam
 def _matching_section_images(data: dict[str, Any], section_names: list[str]) -> list[dict[str, Any]]:
     evidence_items = (data.get("evidence_images") or {}).get("items") or []
     matches: list[dict[str, Any]] = []
+    candidate_names = _expand_section_aliases(section_names)
     for item in evidence_items:
         if item.get("status") != "success":
             continue
         if item.get("type") != "section_text":
             continue
         section_name = str(item.get("section_name", ""))
-        if any(name and (section_name == name or name in section_name) for name in section_names):
+        if any(name and (section_name == name or name in section_name) for name in candidate_names):
             matches.append(item)
     return matches
+
+
+def _expand_section_aliases(section_names: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for name in section_names:
+        expanded.append(name)
+        expanded.extend(SECTION_IMAGE_ALIASES.get(name, []))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for name in expanded:
+        if name in seen:
+            continue
+        seen.add(name)
+        deduped.append(name)
+    return deduped
 
 
 def _overall_status_rows(data: dict[str, Any]) -> list[list[Any]]:

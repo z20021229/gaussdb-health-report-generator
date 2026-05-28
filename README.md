@@ -129,3 +129,4 @@ pytest
 - Word 报告会优先插入 `output/evidence_images/` 中成功生成的 `section_text` 截图，并在附录中说明 HTML/WDR 截图的成功或失败状态。
 - 如果某个检查章节未匹配到原始截图，报告正文会明确写出“未找到该检查项原始截图”。
 - HTML/WDR 截图失败不会阻断 Word 报告生成，失败原因会写入 `output/evidence_images_manifest.yaml`，并同步写入报告附录。
+- 如果目标 Word 报告文件正被本地 Office 进程占用，工具会自动生成同目录的 `_latest.docx` 版本，避免巡检流水线因为文件锁中断。
